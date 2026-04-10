@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+.git/
+.gitignore
+.claude/
+.npm-cache/
+.tmp_shared_skills/
+result_*.json
+test.py
