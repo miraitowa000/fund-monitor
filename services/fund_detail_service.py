@@ -1,0 +1,383 @@
+import re
+from datetime import datetime
+
+from bs4 import BeautifulSoup
+
+from core.cache import cache_get, cache_get_stale, cache_set
+from core.http import http_get
+from core.runtime import DETAIL_EXECUTOR, register_watched_codes
+from services.fund_basic_service import (
+    LINK_ETF_MANUAL_MAP,
+    TTL_DETAIL_SECONDS,
+    TTL_HOLDINGS_SECONDS,
+    TTL_HISTORY_SECONDS,
+    TTL_RELATED_ETF_SECONDS,
+    get_cached_fund_list,
+    get_fund_estimate,
+    get_fund_name_by_code,
+    get_pingzhongdata_snapshot,
+    load_basic_for_detail,
+)
+from services.fund_quote_service import get_realtime_stock_quotes, quote_name_matches
+
+try:
+    import akshare as ak
+except Exception:
+    ak = None
+
+
+def _clean_name(name):
+    text = str(name or '')
+    for token in ['(', ')', '（', '）', '-', ' ', '\t']:
+        text = text.replace(token, '')
+    return text
+
+
+def _is_link_fund_name(name):
+    return '联接' in str(name or '')
+
+
+def _first_col(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _parse_percent_number(v):
+    m = re.search(r'-?\d+(\.\d+)?', str(v or ''))
+    if not m:
+        return 0.0
+    try:
+        return float(m.group(0))
+    except Exception:
+        return 0.0
+
+
+def _fmt_percent_text(v):
+    s = str(v or '').strip()
+    if not s:
+        return '-'
+    if s.endswith('%'):
+        return s
+    m = re.search(r'-?\d+(\.\d+)?', s)
+    if not m:
+        return s
+    try:
+        return f"{float(m.group(0)):.2f}%"
+    except Exception:
+        return s
+
+
+def _is_meaningful_holdings(holdings):
+    if not holdings or len(holdings) < 5:
+        return False
+    valid = 0
+    positive = 0
+    for item in holdings:
+        pct = _parse_percent_number(item.get('pct'))
+        if pct >= 0:
+            valid += 1
+        if pct > 0:
+            positive += 1
+    return valid > 0 and positive > 0
+
+
+def _get_related_etf_from_detail_page(fund_code):
+    code = str(fund_code).zfill(6)
+    cached = cache_get('related_etf', code, TTL_RELATED_ETF_SECONDS)
+    if cached is not None:
+        return cached
+    result = (None, None)
+    try:
+        response = http_get(
+            f'https://fund.eastmoney.com/{code}.html',
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://fund.eastmoney.com/'},
+            timeout=5,
+        )
+        if response.status_code == 200 and response.content:
+            soup = BeautifulSoup(response.content.decode('utf-8', errors='ignore'), 'html.parser')
+            for a in soup.find_all('a', href=True):
+                if '查看相关ETF' not in a.get_text(strip=True):
+                    continue
+                match = re.search(r'fund\.eastmoney\.com/(\d{6})\.html', a.get('href', ''), re.I)
+                if match:
+                    etf_code = match.group(1)
+                    result = (etf_code, get_fund_name_by_code(etf_code))
+                    break
+    except Exception:
+        result = (None, None)
+    cache_set('related_etf', code, result)
+    return result
+
+
+def _find_associated_etf(link_fund_code, link_fund_name=''):
+    code = str(link_fund_code).zfill(6)
+    detail_etf = _get_related_etf_from_detail_page(code)
+    if detail_etf and detail_etf[0]:
+        return detail_etf
+    cache = get_cached_fund_list()
+    if not cache:
+        return LINK_ETF_MANUAL_MAP.get(code, (None, None))
+    df = cache['df']
+    code_col = cache['code_col']
+    name_col = cache['name_col']
+    term = _clean_name(link_fund_name)
+    for token in ['发起式', '联接A', '联接C', '联接', 'QDII', 'A类', 'C类', 'I类', '份额', 'A', 'C', 'I']:
+        term = term.replace(token, '')
+    if not term:
+        return None, None
+    try:
+        matches = df[(df['clean_name'].str.contains(term, regex=False)) & (~df[name_col].astype(str).str.contains('联接', regex=False))]
+        if matches.empty:
+            return None, None
+        for _, row in matches.iterrows():
+            etf_code = str(row[code_col]).zfill(6)
+            if etf_code.startswith(('51', '58', '15', '16', '56')):
+                return etf_code, str(row[name_col])
+        row = matches.iloc[0]
+        return str(row[code_col]).zfill(6), str(row[name_col])
+    except Exception:
+        return LINK_ETF_MANUAL_MAP.get(code, (None, None))
+
+
+def _get_holdings_via_akshare_once(fund_code):
+    if ak is None:
+        return {'success': False, 'holdings': [], 'date': '', 'error': 'akshare not installed'}
+    try:
+        df = ak.fund_portfolio_hold_em(symbol=str(fund_code).zfill(6))
+        if df is None or df.empty:
+            return {'success': False, 'holdings': [], 'date': ''}
+        code_col = _first_col(df, ['股票代码', '证券代码', '代码'])
+        name_col = _first_col(df, ['股票名称', '证券名称', '名称'])
+        pct_col = _first_col(df, ['占净值比例', '持仓占比'])
+        delta_col = _first_col(df, ['较上期变化', '较上期'])
+        date_col = _first_col(df, ['季度', '报告期', '截止日期'])
+        if not code_col or not name_col or not pct_col:
+            return {'success': False, 'holdings': [], 'date': ''}
+        holdings = []
+        seen = set()
+        for _, row in df.iterrows():
+            stock_code = re.sub(r'\D', '', str(row.get(code_col, '')))
+            if len(stock_code) < 5:
+                continue
+            stock_code = stock_code.zfill(6)[-6:]
+            if stock_code in seen:
+                continue
+            seen.add(stock_code)
+            holdings.append({'code': stock_code, 'name': str(row.get(name_col, '')).strip(), 'price': '-', 'change_pct': '-', 'pct': _fmt_percent_text(row.get(pct_col, '-')), 'delta': _fmt_percent_text(row.get(delta_col, '-')) if delta_col else '-'})
+            if len(holdings) >= 10:
+                break
+        report_date = str(df.iloc[0].get(date_col, '')).strip() if date_col and not df.empty else ''
+        if not holdings:
+            return {'success': False, 'holdings': [], 'date': report_date}
+        quote_map = get_realtime_stock_quotes(holdings)
+        for item in holdings:
+            q = quote_map.get(item['code'])
+            if q and quote_name_matches(item.get('name', ''), q.get('name', '')):
+                item['price'] = q.get('price', '-')
+                item['change_pct'] = q.get('change_pct', '-')
+        return {'success': True, 'holdings': holdings, 'date': report_date}
+    except Exception as e:
+        return {'success': False, 'holdings': [], 'date': '', 'error': str(e)}
+
+
+def _get_holdings_via_akshare_with_link_fallback(fund_code):
+    code = str(fund_code).zfill(6)
+    res = _get_holdings_via_akshare_once(code)
+    if res.get('success') and res.get('holdings'):
+        first = res['holdings'][0]
+        if ('ETF' in str(first.get('name') or '').upper() or _parse_percent_number(first.get('pct')) >= 80.0) and re.match(r'^\d{6}$', str(first.get('code', ''))):
+            nested = _get_holdings_via_akshare_once(first.get('code'))
+            if nested.get('success') and nested.get('holdings'):
+                return nested
+        return res
+    link_name = get_fund_name_by_code(code)
+    if not _is_link_fund_name(link_name) and code not in LINK_ETF_MANUAL_MAP:
+        return res
+    etf_code, _ = _find_associated_etf(code, link_name)
+    if etf_code and etf_code != code:
+        nested = _get_holdings_via_akshare_once(etf_code)
+        if nested.get('success') and nested.get('holdings'):
+            return nested
+        nested = get_fund_holdings(etf_code)
+        if nested.get('success') and nested.get('holdings'):
+            return nested
+    return res
+
+
+def get_fund_holdings(fund_code):
+    try:
+        response = http_get(
+            f"http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code={fund_code}&topline=10&year=&month=&rt={int(__import__('time').time()*1000)}",
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': f'http://fundf10.eastmoney.com/jjcc_{fund_code}.html'},
+            timeout=3,
+        )
+        if response.status_code != 200:
+            return {'success': False, 'holdings': [], 'date': ''}
+        soup = BeautifulSoup(response.text, 'html.parser')
+        holdings = []
+        fund_date = soup.find('font', class_='px12').get_text(strip=True) if soup.find('font', class_='px12') else ''
+        seen_codes = set()
+        for table in soup.select('table.tzxq'):
+            header_texts = [h.get_text(' ', strip=True) for h in table.select('thead tr th')]
+            if not header_texts:
+                continue
+            def find_col(keywords):
+                for idx, text in enumerate(header_texts):
+                    if any(k in text for k in keywords):
+                        return idx
+                return -1
+            code_idx = find_col(['代码']); name_idx = find_col(['名称']); pct_idx = find_col(['占净值比例', '持仓占比']); delta_idx = find_col(['较上期', '较上期变化'])
+            if code_idx < 0 or name_idx < 0 or pct_idx < 0:
+                if len(header_texts) >= 9:
+                    code_idx, name_idx, pct_idx, delta_idx = 1, 2, 6, -1
+                elif len(header_texts) >= 7:
+                    code_idx, name_idx, pct_idx, delta_idx = 1, 2, 4, -1
+            if code_idx < 0 or name_idx < 0 or pct_idx < 0:
+                continue
+            for row in table.select('tbody tr'):
+                cols = row.find_all('td')
+                if len(cols) <= max(code_idx, name_idx, pct_idx):
+                    continue
+                code_cell = cols[code_idx]
+                code_text = code_cell.get_text(strip=True).upper()
+                code_link = code_cell.find('a')
+                href = code_link.get('href', '') if code_link else ''
+                href_match = re.search(r'/r/(\d+)\.([A-Z0-9]+)', href, re.I)
+                market = {'116': 'hk', '105': 'us', '106': 'us'}.get(href_match.group(1), '') if href_match else ''
+                stock_code = href_match.group(2).upper() if href_match else (re.search(r'[A-Z]{1,10}|\d{5,6}', code_text, re.I).group(0).upper() if re.search(r'[A-Z]{1,10}|\d{5,6}', code_text, re.I) else '')
+                if not cols[name_idx].get_text(strip=True) or not cols[pct_idx].get_text(strip=True) or not stock_code or stock_code in seen_codes:
+                    continue
+                seen_codes.add(stock_code)
+                holdings.append({'code': stock_code, 'name': cols[name_idx].get_text(strip=True), 'price': '-', 'change_pct': '-', 'pct': cols[pct_idx].get_text(strip=True), 'delta': cols[delta_idx].get_text(strip=True) if (delta_idx >= 0 and delta_idx < len(cols)) else '-', 'market': market})
+                if len(holdings) >= 10:
+                    break
+            if holdings:
+                break
+        holdings = holdings[:10]
+        if holdings:
+            quote_map = get_realtime_stock_quotes(holdings)
+            hk_fallback_items = []
+            for item in holdings:
+                q = quote_map.get(item['code'])
+                if q and quote_name_matches(item.get('name', ''), q.get('name', '')):
+                    item['price'] = q.get('price', '-')
+                    item['change_pct'] = q.get('change_pct', '-')
+                else:
+                    hk_fallback_items.append({'code': item['code'], 'name': item.get('name', ''), 'market': 'hk'})
+            if hk_fallback_items:
+                hk_quote_map = get_realtime_stock_quotes(hk_fallback_items)
+                for item in holdings:
+                    if item.get('price') not in (None, '', '-'):
+                        continue
+                    hk_q = hk_quote_map.get(item['code'])
+                    if hk_q and hk_q.get('price') not in (None, '', '-'):
+                        item['price'] = hk_q.get('price', '-')
+                        item['change_pct'] = hk_q.get('change_pct', '-')
+            for item in holdings:
+                item.pop('market', None)
+        code = str(fund_code).zfill(6)
+        if holdings and code not in LINK_ETF_MANUAL_MAP and _is_meaningful_holdings(holdings):
+            return {'success': True, 'holdings': holdings, 'date': fund_date}
+        ak_res = _get_holdings_via_akshare_with_link_fallback(code)
+        if ak_res.get('success') and ak_res.get('holdings'):
+            return ak_res
+        if holdings:
+            return {'success': True, 'holdings': holdings, 'date': fund_date}
+        return {'success': False, 'holdings': [], 'date': fund_date}
+    except Exception as e:
+        ak_res = _get_holdings_via_akshare_with_link_fallback(str(fund_code).zfill(6))
+        if ak_res.get('success') and ak_res.get('holdings'):
+            return ak_res
+        return {'success': False, 'holdings': [], 'error': str(e)}
+
+
+def get_fund_networth_history(fund_code, days=30):
+    code = str(fund_code).zfill(6)
+    try:
+        response = http_get(
+            f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize={days}&startDate=&endDate=",
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://fund.eastmoney.com/'},
+            timeout=3,
+        )
+        if response.status_code != 200:
+            return {'success': False, 'data': []}
+        result = []
+        for item in response.json().get('Data', {}).get('LSJZList', []):
+            try:
+                result.append({'date': item.get('FSRQ', ''), 'value': float(item.get('DWJZ', 0)), 'change': item.get('JZZZL', '0')})
+            except Exception:
+                continue
+        result.reverse()
+        if result:
+            return {'success': True, 'data': result}
+    except Exception as e:
+        api_error = str(e)
+    try:
+        snapshot = get_pingzhongdata_snapshot(code)
+        result = []
+        for item in (snapshot.get('networth', []) if snapshot else [])[-days:]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                result.append({'date': datetime.fromtimestamp(float(item.get('x')) / 1000).strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
+            except Exception:
+                continue
+        return {'success': bool(result), 'data': result}
+    except Exception as e:
+        return {'success': False, 'data': [], 'error': locals().get('api_error') or str(e)}
+
+
+def build_intraday_from_basic(estimate):
+    try:
+        if not estimate:
+            return {'success': False, 'data': []}
+        gsz = float(estimate.get('gsz') or 0)
+        if gsz <= 0:
+            return {'success': False, 'data': []}
+        if not estimate.get('success'):
+            return {'success': True, 'data': [{'time': '09:30', 'value': round(gsz, 4)}, {'time': '15:00', 'value': round(gsz, 4)}]}
+        gztime = estimate.get('gztime') or ''
+        if not gztime:
+            return {'success': False, 'data': []}
+        minute = gztime.split(' ')[1][:5] if ' ' in gztime else '09:30'
+        return {'success': True, 'data': [{'time': minute, 'value': round(gsz, 4)}]}
+    except Exception as e:
+        return {'success': False, 'data': [], 'error': str(e)}
+
+
+def get_fund_intraday(fund_code):
+    return build_intraday_from_basic(get_fund_estimate(fund_code))
+
+
+def get_fund_details(fund_code):
+    code = str(fund_code).zfill(6)
+    register_watched_codes([code])
+    cached_detail = cache_get('detail', code, TTL_DETAIL_SECONDS)
+    if cached_detail:
+        return cached_detail
+    basic = load_basic_for_detail(code)
+    def load_holdings():
+        cached = cache_get('holdings', code, TTL_HOLDINGS_SECONDS)
+        if cached:
+            return cached
+        res = get_fund_holdings(code)
+        if res and res.get('success'):
+            cache_set('holdings', code, res)
+            return res
+        return cache_get_stale('holdings', code) or res
+    def load_history():
+        cached = cache_get('history', code, TTL_HISTORY_SECONDS)
+        if cached:
+            return cached
+        res = get_fund_networth_history(code, days=30)
+        if res and res.get('success'):
+            cache_set('history', code, res)
+            return res
+        return cache_get_stale('history', code) or res
+    holdings = DETAIL_EXECUTOR.submit(load_holdings).result()
+    history = DETAIL_EXECUTOR.submit(load_history).result()
+    result = {'basic': basic if basic else {'success': False}, 'holdings': holdings if holdings else {'success': False, 'holdings': []}, 'history': history if history else {'success': False, 'data': []}, 'intraday': build_intraday_from_basic(basic)}
+    cache_set('detail', code, result)
+    return result
