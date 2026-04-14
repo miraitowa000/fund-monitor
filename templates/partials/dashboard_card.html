@@ -1,0 +1,115 @@
+<div class="card shadow-sm mb-4">
+  <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+    <h4 class="m-0">基金实时监控</h4>
+    <span v-if="loading" class="badge bg-warning text-dark">更新中...</span>
+    <span v-else class="badge bg-success">已更新：{{ lastUpdateTime }}</span>
+  </div>
+  <div class="card-body">
+    <div class="market-status-row">
+      <div>
+        <span class="text-muted me-2">交易时段</span>
+        <span class="market-status-badge" :class="marketStatus.className">{{ marketStatus.text }}</span>
+      </div>
+      <div class="text-muted small">当前时间：{{ marketNowText }}</div>
+    </div>
+    <div class="index-ticker mb-3" v-if="indexes.length > 0">
+      <div class="index-ticker-item" :class="getIndexCardClass(idx.pct)" v-for="idx in indexes" :key="idx.code">
+        <div class="index-name" :class="getColorClass(idx.pct)">{{ idx.name }}</div>
+        <div class="index-price" :class="getColorClass(idx.pct)">{{ idx.price }}</div>
+        <div class="index-delta" :class="getColorClass(idx.pct)">
+          {{ formatChange(idx.change, 2, false) }}&nbsp;&nbsp;{{ formatChange(idx.pct, 2) }}%
+        </div>
+      </div>
+    </div>
+    <div class="index-ticker mb-3" v-else-if="loading">
+      <div class="index-ticker-item" v-for="n in 5" :key="`idx-skeleton-${n}`">
+        <div class="skeleton" style="height:18px; width:60%;"></div>
+        <div class="skeleton mt-2" style="height:36px; width:75%;"></div>
+        <div class="skeleton mt-2" style="height:16px; width:85%;"></div>
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <div class="toolbar">
+        <div class="input-group mb-2 mb-md-0">
+          <span class="input-group-text">添加基金</span>
+          <input type="text" class="form-control code-input" v-model="codeInput" @keyup.enter="addFunds" placeholder="输入代码，例如：161725">
+          <button class="btn btn-primary" @click="addFunds">添加</button>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <button class="btn btn-outline-secondary action-btn" @click="fetchData">刷新</button>
+          <button class="btn btn-outline-danger action-btn" @click="clearAll" v-if="savedCodes.length > 0">清空</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-check form-switch mb-3">
+      <input class="form-check-input" type="checkbox" id="autoRefresh" v-model="autoRefresh">
+      <label class="form-check-label" for="autoRefresh">自动刷新（基金 60 秒 / 指数 15 秒）</label>
+    </div>
+
+    <div class="table-responsive desktop-only">
+      <table class="table table-hover table-striped align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th>估算净值</th>
+            <th class="sortable" @click="toggleSort">估算涨跌幅 <span class="sort-icon">{{ sortIcon }}</span></th>
+            <th>更新时间</th>
+            <th>昨日净值</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody v-if="sortedFunds.length > 0">
+          <tr v-for="fund in sortedFunds" :key="fund.code">
+            <td><a href="#" @click.prevent="showDetail(fund.code)" class="text-decoration-none">{{ fund.code }}</a></td>
+            <td><a href="#" @click.prevent="showDetail(fund.code)" class="text-decoration-none">{{ fund.name }}</a></td>
+            <td>{{ fund.gsz }}</td>
+            <td :class="getColorClass(fund.gszzl)">{{ formatChange(fund.gszzl, 2) }}%</td>
+            <td>{{ fund.gztime }}</td>
+            <td>{{ fund.dwjz }}</td>
+            <td>
+              <button class="btn btn-sm btn-info me-1" @click="showDetail(fund.code)">详情</button>
+              <button class="btn btn-sm btn-danger" @click="removeFund(fund.code)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+        <tbody v-else-if="loading">
+          <tr v-for="n in 5" :key="`fund-skeleton-${n}`">
+            <td v-for="m in 7" :key="m"><div class="skeleton" style="height:14px; width:80px;"></div></td>
+          </tr>
+        </tbody>
+        <tbody v-else>
+          <tr><td colspan="7" class="text-center text-muted p-4">暂无关注基金，请先添加。</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mobile-only" v-if="sortedFunds.length > 0">
+      <div v-for="fund in sortedFunds" :key="fund.code" class="mobile-card">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <div>
+            <div class="fw-semibold" @click="showDetail(fund.code)" style="cursor:pointer">{{ fund.name }}</div>
+            <div class="text-muted small">代码：{{ fund.code }}</div>
+          </div>
+          <div class="d-flex gap-1">
+            <button class="btn btn-sm btn-info" @click="showDetail(fund.code)">详情</button>
+            <button class="btn btn-sm btn-danger" @click="removeFund(fund.code)">删除</button>
+          </div>
+        </div>
+        <div class="d-flex justify-content-between"><div>估算净值：{{ fund.gsz }}</div><div :class="getColorClass(fund.gszzl)">涨跌：{{ formatChange(fund.gszzl, 2) }}%</div></div>
+        <div class="d-flex justify-content-between mt-1"><div>昨日净值：{{ fund.dwjz }}</div><div>更新时间：{{ fund.gztime }}</div></div>
+      </div>
+    </div>
+    <div class="mobile-only" v-else-if="loading">
+      <div v-for="n in 3" :key="`mobile-skeleton-${n}`" class="mobile-card">
+        <div class="skeleton" style="height:18px; width:55%;"></div>
+        <div class="skeleton mt-2" style="height:16px; width:80%;"></div>
+      </div>
+    </div>
+    <div class="mobile-only" v-else>
+      <div class="text-center text-muted p-3">暂无关注基金</div>
+    </div>
+  </div>
+</div>
