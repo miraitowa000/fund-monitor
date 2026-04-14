@@ -148,11 +148,7 @@ createApp({
       funds.value = [];
     };
 
-    const timers = createRefreshTimers({
-      getStatusText: () => marketStatus.value.text,
-      fetchFunds,
-      fetchIndexes
-    });
+    const timers = createRefreshTimers({ fetchFunds, fetchIndexes });
 
     const startClockTimer = () => {
       if (clockTimer) clearInterval(clockTimer);
