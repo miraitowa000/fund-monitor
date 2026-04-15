@@ -135,6 +135,145 @@ body { padding-top: 20px; background: #f8f9fa; }
   box-shadow: 0 6px 18px rgba(13, 110, 253, 0.55);
   color: #fff;
 }
+
+/* 打赏按钮 - 在交流群按钮上方 */
+.donate-float-btn {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  z-index: 1050;
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: #fff;
+  border: none;
+  border-radius: 50px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(245, 87, 108, 0.45);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.15s, box-shadow 0.15s;
+  text-decoration: none;
+}
+.donate-float-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(245, 87, 108, 0.55);
+  color: #fff;
+}
+.donate-float-btn:focus-visible {
+  outline: 3px solid rgba(245, 87, 108, 0.22);
+  outline-offset: 3px;
+}
+.float-btn-icon {
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* 打赏模态框样式 */
+.donate-modal-dialog {
+  max-width: 540px;
+}
+.donate-modal-content {
+  border: 0;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(244, 114, 182, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 26%),
+    linear-gradient(180deg, #ffffff 0%, #fff8fb 100%);
+}
+.donate-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0;
+}
+.donate-hero {
+  text-align: center;
+  margin-bottom: 18px;
+}
+.donate-intro {
+  color: #475569;
+  font-size: 15px;
+  line-height: 1.7;
+}
+.donate-tags {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.donate-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #be185d;
+  background: rgba(244, 114, 182, 0.12);
+  border: 1px solid rgba(244, 114, 182, 0.2);
+}
+.donate-tabs {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid #f3e8ff;
+  border-radius: 18px;
+  padding: 6px;
+}
+.donate-tabs .nav-link {
+  color: #64748b;
+  font-weight: 700;
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+.donate-tabs .nav-link.active {
+  background: linear-gradient(135deg, #ec4899 0%, #f97316 100%);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(236, 72, 153, 0.24);
+}
+.donate-card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(244, 114, 182, 0.14);
+  border-radius: 22px;
+  padding: 18px 18px 16px;
+}
+.donate-qr-shell {
+  border-radius: 18px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 241, 246, 0.95) 100%);
+  border: 1px solid rgba(251, 113, 133, 0.12);
+}
+.donate-channel {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #334155;
+  margin-bottom: 12px;
+}
+.donate-qr-frame {
+  width: min(100%, 300px);
+  margin: 0 auto;
+  padding: 14px;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.08);
+}
+.donate-qr-img {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+  border-radius: 12px;
+}
+.donate-footer-note {
+  margin-top: 16px;
+  text-align: center;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
 @media (max-width: 576px) {
   .desktop-only { display: none; }
   .mobile-only { display: block; }
@@ -145,4 +284,9 @@ body { padding-top: 20px; background: #f8f9fa; }
   .index-price { font-size: 30px; }
   .index-delta { font-size: 14px; }
   .qr-float-btn { bottom: 16px; right: 16px; padding: 9px 14px; font-size: 13px; }
+  .donate-float-btn { bottom: 68px; right: 16px; padding: 9px 14px; font-size: 13px; }
+  .donate-title { font-size: 24px; }
+  .donate-card { padding: 14px 14px 12px; }
+  .donate-qr-shell { padding: 12px; }
+  .donate-tabs .nav-link { padding: 9px 10px; font-size: 14px; }
 }

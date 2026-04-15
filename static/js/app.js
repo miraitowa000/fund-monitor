@@ -57,8 +57,8 @@ createApp({
       if (!Array.isArray(funds.value) || funds.value.length === 0) return [];
       if (sortDir.value === 'none') return funds.value.slice();
       return funds.value.slice().sort((a, b) => {
-        const av = parseFloat(a.gszzl || '0');
-        const bv = parseFloat(b.gszzl || '0');
+        const av = parseFloat(a.nav_confirmed ? a.confirmed_change : a.gszzl || '0');
+        const bv = parseFloat(b.nav_confirmed ? b.confirmed_change : b.gszzl || '0');
         return sortDir.value === 'asc' ? av - bv : bv - av;
       });
     });

@@ -54,8 +54,8 @@
           <tr>
             <th>代码</th>
             <th>名称</th>
-            <th>估算净值</th>
-            <th class="sortable" @click="toggleSort">估算涨跌幅 <span class="sort-icon">{{ sortIcon }}</span></th>
+            <th>当前净值</th>
+            <th class="sortable" @click="toggleSort">当前涨跌幅 <span class="sort-icon">{{ sortIcon }}</span></th>
             <th>更新时间</th>
             <th>昨日净值</th>
             <th>操作</th>
@@ -64,10 +64,13 @@
         <tbody v-if="sortedFunds.length > 0">
           <tr v-for="fund in sortedFunds" :key="fund.code">
             <td><a href="#" @click.prevent="showDetail(fund.code)" class="text-decoration-none">{{ fund.code }}</a></td>
-            <td><a href="#" @click.prevent="showDetail(fund.code)" class="text-decoration-none">{{ fund.name }}</a></td>
-            <td>{{ fund.gsz }}</td>
-            <td :class="getColorClass(fund.gszzl)">{{ formatChange(fund.gszzl, 2) }}%</td>
-            <td>{{ fund.gztime }}</td>
+            <td>
+              <a href="#" @click.prevent="showDetail(fund.code)" class="text-decoration-none">{{ fund.name }}</a>
+              <span v-if="fund.nav_confirmed" class="badge bg-success ms-1" style="font-size:0.7rem">已更新</span>
+            </td>
+            <td>{{ fund.nav_confirmed ? fund.confirmed_nav : fund.gsz }}</td>
+            <td :class="getColorClass(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl)">{{ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) }}%</td>
+            <td>{{ fund.nav_confirmed ? fund.jzrq : fund.gztime }}</td>
             <td>{{ fund.dwjz }}</td>
             <td>
               <button class="btn btn-sm btn-info me-1" @click="showDetail(fund.code)">详情</button>
@@ -90,7 +93,10 @@
       <div v-for="fund in sortedFunds" :key="fund.code" class="mobile-card">
         <div class="d-flex justify-content-between align-items-center mb-1">
           <div>
-            <div class="fw-semibold" @click="showDetail(fund.code)" style="cursor:pointer">{{ fund.name }}</div>
+            <div class="fw-semibold" @click="showDetail(fund.code)" style="cursor:pointer">
+              {{ fund.name }}
+              <span v-if="fund.nav_confirmed" class="badge bg-success ms-1" style="font-size:0.65rem">已更新</span>
+            </div>
             <div class="text-muted small">代码：{{ fund.code }}</div>
           </div>
           <div class="d-flex gap-1">
@@ -98,8 +104,14 @@
             <button class="btn btn-sm btn-danger" @click="removeFund(fund.code)">删除</button>
           </div>
         </div>
-        <div class="d-flex justify-content-between"><div>估算净值：{{ fund.gsz }}</div><div :class="getColorClass(fund.gszzl)">涨跌：{{ formatChange(fund.gszzl, 2) }}%</div></div>
-        <div class="d-flex justify-content-between mt-1"><div>昨日净值：{{ fund.dwjz }}</div><div>更新时间：{{ fund.gztime }}</div></div>
+        <div class="d-flex justify-content-between">
+          <div>净值：{{ fund.nav_confirmed ? fund.confirmed_nav : fund.gsz }}</div>
+          <div :class="getColorClass(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl)">涨跌：{{ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) }}%</div>
+        </div>
+        <div class="d-flex justify-content-between mt-1">
+          <div>昨日净值：{{ fund.dwjz }}</div>
+          <div>更新时间：{{ fund.nav_confirmed ? fund.jzrq : fund.gztime }}</div>
+        </div>
       </div>
     </div>
     <div class="mobile-only" v-else-if="loading">
