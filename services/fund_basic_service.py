@@ -35,6 +35,23 @@ _BG_THREAD = None
 _BG_THREAD_LOCK = threading.Lock()
 
 
+def _build_basic_payload(code, name, gsz='-', gszzl='-', gztime='-', dwjz='-', jzrq='-', success=False, message='', nav_confirmed=False, confirmed_nav='', confirmed_change=''):
+    return {
+        'code': code,
+        'name': name,
+        'gsz': gsz,
+        'gszzl': gszzl,
+        'gztime': gztime,
+        'dwjz': dwjz,
+        'jzrq': jzrq,
+        'success': success,
+        'message': message,
+        'nav_confirmed': nav_confirmed,
+        'confirmed_nav': confirmed_nav,
+        'confirmed_change': confirmed_change,
+    }
+
+
 def _first_col(df, candidates):
     for c in candidates:
         if c in df.columns:
@@ -69,7 +86,12 @@ def get_cached_fund_list():
             df = df.copy()
             df[code_col] = df[code_col].astype(str).str.zfill(6)
             df['clean_name'] = df[name_col].astype(str).map(_clean_name)
-            _FUND_LIST_CACHE = {'df': df, 'code_col': code_col, 'name_col': name_col, 'name_map': dict(zip(df[code_col], df[name_col].astype(str)))}
+            _FUND_LIST_CACHE = {
+                'df': df,
+                'code_col': code_col,
+                'name_col': name_col,
+                'name_map': dict(zip(df[code_col], df[name_col].astype(str))),
+            }
             return _FUND_LIST_CACHE
         except Exception:
             return None
@@ -99,9 +121,11 @@ def get_pingzhongdata_snapshot(fund_code):
         if response.status_code != 200 or not response.text:
             return None
         text = response.text
+
         def extract_string(var_name):
             match = re.search(rf'var\s+{var_name}\s*=\s*"([^"]*)";', text)
             return match.group(1).strip() if match else ''
+
         def extract_json(var_name):
             match = re.search(rf'var\s+{var_name}\s*=\s*(.*?);', text, re.S)
             if not match:
@@ -110,14 +134,17 @@ def get_pingzhongdata_snapshot(fund_code):
                 return json.loads(match.group(1).strip())
             except Exception:
                 return None
+
         networth = extract_json('Data_netWorthTrend') or []
         latest = networth[-1] if networth else {}
         previous = networth[-2] if len(networth) >= 2 else {}
+
         def _fmt_date(item):
             try:
                 return datetime.fromtimestamp(float(item.get('x')) / 1000).strftime('%Y-%m-%d')
             except Exception:
                 return ''
+
         result = {
             'code': extract_string('fS_code') or code,
             'name': extract_string('fS_name'),
@@ -155,7 +182,17 @@ def _is_qdii_like_snapshot(snapshot):
 
 def _build_snapshot_estimate(code, fallback_name, snapshot, message):
     latest_date = snapshot.get('latest_date', '-') if snapshot else '-'
-    return {'code': code, 'name': snapshot.get('name') if snapshot and snapshot.get('name') else fallback_name, 'gsz': snapshot.get('latest_value', '-') if snapshot else '-', 'gszzl': snapshot.get('latest_change', '-') if snapshot else '-', 'gztime': latest_date or '-', 'dwjz': snapshot.get('previous_value', '-') if snapshot else '-', 'jzrq': snapshot.get('previous_date', latest_date) if snapshot else '-', 'success': False, 'message': message}
+    return _build_basic_payload(
+        code=code,
+        name=snapshot.get('name') if snapshot and snapshot.get('name') else fallback_name,
+        gsz=snapshot.get('latest_value', '-') if snapshot else '-',
+        gszzl=snapshot.get('latest_change', '-') if snapshot else '-',
+        gztime=latest_date or '-',
+        dwjz=snapshot.get('previous_value', '-') if snapshot else '-',
+        jzrq=snapshot.get('previous_date', latest_date) if snapshot else '-',
+        success=False,
+        message=message,
+    )
 
 
 def _load_pingzhong_fallback(code, fallback_name, message):
@@ -166,7 +203,81 @@ def _load_pingzhong_fallback(code, fallback_name, message):
         return _build_snapshot_estimate(code, fallback_name, snapshot, f"QDII暂无盘中估值，展示最近净值 {snapshot.get('latest_date', '-') or '-'}")
     if snapshot and snapshot.get('latest_value') not in ('', '-', None):
         return _build_snapshot_estimate(code, fallback_name, snapshot, f"{message}，展示最近净值 {snapshot.get('latest_date', '-') or '-'}")
-    return {'code': code, 'name': fallback_name, 'gsz': '-', 'gszzl': '-', 'gztime': '-', 'dwjz': snapshot.get('latest_value', '-') if snapshot else '-', 'jzrq': snapshot.get('latest_date', '-') if snapshot else '-', 'success': False, 'message': message}
+    return _build_basic_payload(
+        code=code,
+        name=fallback_name,
+        gsz='-',
+        gszzl='-',
+        gztime='-',
+        dwjz=snapshot.get('latest_value', '-') if snapshot else '-',
+        jzrq=snapshot.get('latest_date', '-') if snapshot else '-',
+        success=False,
+        message=message,
+    )
+
+
+def _is_trading_hours():
+    """判断当前是否在交易时段（周一到周五 9:30-11:30, 13:00-15:00）"""
+    now = datetime.now()
+    # 周末不交易（0=周一, 6=周日）
+    if now.weekday() >= 5:
+        return False
+    # 计算当前分钟数
+    current_minutes = now.hour * 60 + now.minute
+    # 上午交易时段：9:30-11:30 (570-690分钟)
+    morning_trading = 570 <= current_minutes < 690
+    # 下午交易时段：13:00-15:00 (780-900分钟)
+    afternoon_trading = 780 <= current_minutes < 900
+    return morning_trading or afternoon_trading
+
+
+def _should_check_confirmed_nav(fund_name):
+    """判断是否需要查询历史接口获取官方净值"""
+    fund_name_upper = str(fund_name or '').upper()
+    # QDII 基金始终查询（更新时间不固定）
+    if 'QDII' in fund_name_upper or 'QDII-ETF' in fund_name_upper:
+        return True
+    # 非交易时段查询
+    return not _is_trading_hours()
+
+
+def _enrich_confirmed_nav(code, result):
+    today = datetime.now().strftime('%Y-%m-%d')
+    fund_name = result.get('name', '')
+
+    # 判断是否需要查询历史接口
+    if not _should_check_confirmed_nav(fund_name):
+        # 交易时段，使用估算值
+        return result
+
+    # 非交易时段或 QDII 基金，查询历史接口
+    try:
+        from services.fund_detail_service import get_fund_networth_history
+
+        history_result = get_fund_networth_history(code, days=2)
+        if history_result.get('success') and history_result.get('data'):
+            history_data = history_result['data']
+            if not history_data:
+                return result
+
+            latest = history_data[-1]
+
+            # 如果最新记录是今天，说明官方净值已公布
+            if latest and latest.get('date') == today:
+                result['nav_confirmed'] = True
+                result['confirmed_nav'] = str(latest.get('value', ''))
+                result['confirmed_change'] = str(latest.get('change', ''))
+                result['jzrq'] = today
+                # 获取前一天净值作为"昨日净值"
+                if len(history_data) >= 2:
+                    previous = history_data[-2]
+                    result['dwjz'] = str(previous.get('value', result.get('dwjz')))
+    except Exception as e:
+        # 静默失败，保持估算值
+        # 可以在这里添加日志记录：print(f"查询历史净值失败 {code}: {e}")
+        pass
+
+    return result
 
 
 def get_fund_estimate(fund_code):
@@ -184,7 +295,17 @@ def get_fund_estimate(fund_code):
         if not match:
             return _load_pingzhong_fallback(code, fallback_name, '实时估值返回异常')
         data = json.loads(match.group(1))
-        return {'code': data.get('fundcode') or code, 'name': data.get('name') or fallback_name, 'gsz': data.get('gsz'), 'gszzl': data.get('gszzl'), 'gztime': data.get('gztime'), 'dwjz': data.get('dwjz'), 'jzrq': data.get('jzrq'), 'success': True}
+        result = _build_basic_payload(
+            code=data.get('fundcode') or code,
+            name=data.get('name') or fallback_name,
+            gsz=data.get('gsz'),
+            gszzl=data.get('gszzl'),
+            gztime=data.get('gztime'),
+            dwjz=data.get('dwjz'),
+            jzrq=data.get('jzrq'),
+            success=True,
+        )
+        return _enrich_confirmed_nav(code, result)
     except Exception as e:
         return _load_pingzhong_fallback(code, fallback_name, f'实时估值请求失败: {e}')
 
@@ -205,7 +326,17 @@ def submit_basic_refresh(code, executor):
 
 
 def build_timeout_placeholder(code):
-    return {'code': code, 'name': code, 'gsz': '-', 'gszzl': '-', 'gztime': '-', 'dwjz': '-', 'jzrq': '-', 'success': False, 'message': '请求超时，请稍后刷新'}
+    return _build_basic_payload(
+        code=code,
+        name=code,
+        gsz='-',
+        gszzl='-',
+        gztime='-',
+        dwjz='-',
+        jzrq='-',
+        success=False,
+        message='请求超时，请稍后刷新',
+    )
 
 
 def load_basic_for_detail(code, request_timeout=DETAIL_REQUEST_TIMEOUT_SECONDS):
@@ -271,7 +402,11 @@ def _background_refresh_loop():
         codes = get_watched_codes()
         if not codes:
             continue
-        futures = [submit_basic_refresh(code, BG_REFRESH_EXECUTOR) for code in codes if not (cache_get_age('basic', code) is not None and cache_get_age('basic', code) < max(TTL_BASIC_SECONDS - 15, 1))]
+        futures = [
+            submit_basic_refresh(code, BG_REFRESH_EXECUTOR)
+            for code in codes
+            if not (cache_get_age('basic', code) is not None and cache_get_age('basic', code) < max(TTL_BASIC_SECONDS - 15, 1))
+        ]
         if futures:
             futures_wait(futures, timeout=15)
 

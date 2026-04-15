@@ -30,10 +30,21 @@
         </div>
         <div v-else>
           <div class="row mb-4">
-            <div class="col-md-3 col-6"><div class="text-muted small">估算净值</div><div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.gszzl)">{{ detailFund.basic.gsz || '-' }}</div></div>
-            <div class="col-md-3 col-6"><div class="text-muted small">估算涨跌</div><div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.gszzl)">{{ formatChange(detailFund.basic.gszzl, 2) }}%</div></div>
+            <div class="col-md-3 col-6">
+              <div class="text-muted small">当前净值</div>
+              <div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl)">
+                {{ detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_nav : detailFund.basic.gsz || '-' }}
+                <span v-if="detailFund.basic.nav_confirmed" class="badge bg-success ms-1" style="font-size:0.5rem">已更新</span>
+              </div>
+            </div>
+            <div class="col-md-3 col-6">
+              <div class="text-muted small">当前涨跌幅</div>
+              <div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl)">
+                {{ formatChange(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl, 2) }}%
+              </div>
+            </div>
             <div class="col-md-3 col-6"><div class="text-muted small">昨日净值</div><div class="fs-4 fw-bold">{{ detailFund.basic.dwjz || '-' }}</div></div>
-            <div class="col-md-3 col-6"><div class="text-muted small">更新时间</div><div class="fs-6">{{ detailFund.basic.gztime || '-' }}</div></div>
+            <div class="col-md-3 col-6"><div class="text-muted small">更新时间</div><div class="fs-6">{{ detailFund.basic.nav_confirmed ? detailFund.basic.jzrq : detailFund.basic.gztime || '-' }}</div></div>
           </div>
 
           <ul class="nav nav-tabs mb-3" id="detailTabs" role="tablist">
