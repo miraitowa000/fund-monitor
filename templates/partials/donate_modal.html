@@ -1,0 +1,65 @@
+<div class="modal fade" id="donateModal" tabindex="-1" aria-labelledby="donateModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered donate-modal-dialog">
+    <div class="modal-content donate-modal-content">
+      <div class="modal-header border-0 pb-0">
+        <div class="w-100 text-center pe-4">
+          <h5 class="modal-title donate-title" id="donateModalLabel">支持作者</h5>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body pt-3">
+        <div class="donate-hero">
+          <p class="donate-intro mb-2">如果这个工具对你有帮助，欢迎支持作者</p>
+          <div class="donate-tags" aria-label="支持用途">
+            <span class="donate-tag">持续更新</span>
+            <span class="donate-tag">功能迭代</span>
+            <span class="donate-tag">服务成本</span>
+          </div>
+        </div>
+
+        <ul class="nav nav-pills nav-fill donate-tabs mb-3" id="donateTabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="wechat-tab" data-bs-toggle="tab" data-bs-target="#wechat-pane" type="button" role="tab" aria-controls="wechat-pane" aria-selected="true">
+              微信
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="alipay-tab" data-bs-toggle="tab" data-bs-target="#alipay-pane" type="button" role="tab" aria-controls="alipay-pane" aria-selected="false">
+              支付宝
+            </button>
+          </li>
+        </ul>
+
+        <div class="tab-content" id="donateTabContent">
+          <div class="tab-pane fade show active" id="wechat-pane" role="tabpanel" aria-labelledby="wechat-tab" tabindex="0">
+            <div class="donate-card text-center">
+              <div class="donate-qr-shell">
+                <div class="donate-qr-frame">
+                  <img src="/static/images/donate/wechat_qr.png"
+                       alt="微信赞赏码"
+                       class="donate-qr-img">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-pane fade" id="alipay-pane" role="tabpanel" aria-labelledby="alipay-tab" tabindex="0">
+            <div class="donate-card text-center">
+              <div class="donate-qr-shell">
+                <div class="donate-qr-frame">
+                  <img src="/static/images/donate/alipay_qr.jpg"
+                       alt="支付宝收款码"
+                       class="donate-qr-img">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="donate-footer-note">
+          感谢有您的支持，每一份支持，都会转化为更稳定的服务和更快的迭代。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
