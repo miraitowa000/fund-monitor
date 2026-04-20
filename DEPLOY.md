@@ -1,85 +1,116 @@
-# 项目部署说明
+# 部署说明
 
-这是一个 Flask 应用，容器内通过 `gunicorn` 启动，默认监听 `5000` 端口。
+项目提供两种运行方式：
 
-## 项目概况
+- 本地测试：直接 `flask run`
+- 生产环境：使用 `docker compose`
 
-- 入口文件：`app.py`
-- Web 框架：`Flask`
-- 容器启动命令：`gunicorn -b 0.0.0.0:5000 app:app`
-- 健康检查接口：`GET /health`
-- 前端页面：`GET /`
+当前项目只区分两个环境：
 
-## 推荐部署方式
+- `testing`
+- `production`
 
-服务器已经安装 Docker 时，优先使用 `docker compose` 部署。
+配置加载规则如下：
 
-## 1. 上传代码到服务器
+- 本地测试默认读取 `.env.testing`
+- `docker-compose.yml` 固定读取 `.env.production`
 
-把整个项目目录上传到服务器，例如：
+## 一、部署前准备
 
-```bash
-/opt/fund-monitor
+### 1. 安装基础依赖
+
+服务器需要具备以下运行条件：
+
+- Docker
+- Docker Compose
+- 可访问外网
+- 可连接 MySQL
+
+### 2. 创建生产数据库
+
+应用启动时会自动创建缺失的表，但不会自动创建数据库本身。
+
+请先在 MySQL 中手动创建数据库，例如：
+
+```sql
+CREATE DATABASE fund_monitor_production CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-进入项目目录：
+### 3. 准备生产配置文件
+
+在项目根目录创建 `.env.production`：
+
+```env
+APP_ENV=production
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=replace-with-production-password
+DB_NAME=fund_monitor_production
+DB_CHARSET=utf8mb4
+```
+
+说明：
+
+- `APP_ENV` 必须是 `production`
+- `DB_NAME` 必须是你已创建好的数据库名
+- `.env.production` 已加入 `.gitignore`，不要提交到仓库
+
+## 二、首次部署
+
+### 1. 上传代码
+
+将项目上传到服务器，例如：
 
 ```bash
+cd /opt
+git clone <your-repo> fund-monitor
 cd /opt/fund-monitor
 ```
 
-## 2. 构建并启动
+如果不是通过 Git，也可以直接上传项目目录。
 
-首次部署：
+### 2. 构建并启动
 
 ```bash
 docker compose up -d --build
 ```
 
-查看容器状态：
+### 3. 查看状态
 
 ```bash
 docker compose ps
 ```
 
-查看日志：
+### 4. 查看日志
 
 ```bash
 docker compose logs -f
 ```
 
-## 3. 访问服务
+## 三、访问服务
 
-当前 `docker-compose.yml` 把服务器的 `8065` 端口映射到容器 `5000` 端口，所以可以直接访问：
+当前 [docker-compose.yml](./docker-compose.yml) 将宿主机 `8065` 端口映射到容器 `5000` 端口，因此可直接访问：
 
 ```text
 http://服务器IP:8065
 ```
 
-如果你的 `OpenResty` 反向代理已经转发到 `127.0.0.1:8065`，这里不需要再改。
+健康检查地址：
 
-如果你想改成其他端口，对外改这里：
-
-```yaml
-ports:
-  - "8065:5000"
+```text
+http://服务器IP:8065/health
 ```
 
-然后重新启动：
+## 四、更新发布
+
+代码更新后，在项目目录执行：
 
 ```bash
 docker compose up -d --build
 ```
 
-## 4. 更新发布
-
-以后代码更新后，进入项目目录重新执行：
-
-```bash
-docker compose up -d --build
-```
-
-如果只想重启：
+如果只是重启：
 
 ```bash
 docker compose restart
@@ -91,33 +122,28 @@ docker compose restart
 docker compose down
 ```
 
-## 5. 防火墙和安全组
+## 五、数据库初始化说明
 
-你至少要放行以下端口中的一个：
+应用启动时会调用数据库初始化逻辑：
 
-- `5000`，如果你直接对外暴露应用端口
-- `8065`，如果你通过 `OpenResty/Nginx` 转发到该端口
-- `80`，如果你改成 `80:5000`
-- `443`，如果你后面接 `Nginx` 做 HTTPS
+- 自动创建缺失的表
+- 不会自动创建数据库
 
-云服务器还需要同步检查安全组规则。
+因此生产部署时你只需要：
 
-## 6. 推荐的线上接入方式
+1. 手动创建数据库
+2. 正确配置 `.env.production`
+3. 启动容器
 
-更稳妥的做法是：
+## 六、推荐接入方式
 
-- Docker 容器继续监听 `5000`
-- 宿主机用 `Nginx` 监听 `80/443`
-- `Nginx` 反向代理到 `127.0.0.1:5000`
+推荐生产环境使用：
 
-这样更方便：
+- Docker 容器监听 `5000`
+- 宿主机暴露 `8065`
+- Nginx / OpenResty 反向代理到 `127.0.0.1:8065`
 
-- 绑定域名
-- 配置 HTTPS 证书
-- 做访问日志和限流
-- 后续平滑扩容
-
-`OpenResty/Nginx` 示例：
+示例：
 
 ```nginx
 server {
@@ -134,25 +160,12 @@ server {
 }
 ```
 
-## 7. 纯 Docker 命令方式
-
-如果你不想用 `docker compose`，也可以直接运行：
-
-```bash
-docker build -t fund-monitor .
-docker run -d \
-  --name fund-monitor \
-  --restart=always \
-  -p 8065:5000 \
-  fund-monitor
-```
-
-## 8. 排障命令
+## 七、排查命令
 
 查看日志：
 
 ```bash
-docker logs -f fund-monitor
+docker compose logs -f
 ```
 
 进入容器：
@@ -168,8 +181,9 @@ curl http://127.0.0.1:5000/health
 curl http://127.0.0.1:8065/health
 ```
 
-## 9. 部署注意点
+## 八、注意事项
 
-- 这个项目依赖外部财经数据接口，服务器需要具备正常外网访问能力
-- `Dockerfile` 使用了清华 PyPI 镜像，如果你的服务器不在国内且下载异常，可以改回默认 PyPI
-- 如果你准备挂域名，建议不要直接长期暴露 `5000`，而是配合 `Nginx + HTTPS`
+- 项目依赖外部基金数据接口，服务器必须具备外网访问能力
+- `.env.production` 不要提交到仓库
+- 如果更换数据库配置，重新执行 `docker compose up -d --build`
+- 生产环境建议通过 Nginx 配置域名和 HTTPS，不建议长期直接暴露应用端口

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="基金监控">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#eff6ff" />
+      <stop offset="100%" stop-color="#dbeafe" />
+    </linearGradient>
+    <linearGradient id="cubeFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#243b78" />
+      <stop offset="100%" stop-color="#182955" />
+    </linearGradient>
+    <linearGradient id="cubeSide" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2d458a" />
+      <stop offset="100%" stop-color="#1f3164" />
+    </linearGradient>
+    <linearGradient id="cubeTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#314a92" />
+      <stop offset="100%" stop-color="#22366d" />
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#35c2ff" />
+      <stop offset="100%" stop-color="#19f0df" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.8" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="url(#bg)" />
+
+  <path d="M17 48 L32 56 L48 48 L32 41 Z" fill="#ffffff" fill-opacity="0.4" />
+
+  <path d="M20 21 L32 14 L45 21 L32 28 Z" fill="url(#cubeTop)" />
+  <path d="M20 21 L20 44 L32 51 L32 28 Z" fill="url(#cubeFront)" />
+  <path d="M45 21 L45 44 L32 51 L32 28 Z" fill="url(#cubeSide)" />
+
+  <path d="M23 19 L31 14.5 L39 19" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" opacity="0.9" />
+  <path d="M25 23 L29 23" fill="none" stroke="url(#neon)" stroke-width="1.8" stroke-linecap="round" />
+  <path d="M31 21.5 L39 21.5" fill="none" stroke="url(#neon)" stroke-width="1.8" stroke-linecap="round" />
+
+  <path d="M12 40 L22 34 L30 43 L40 28 L52 18" fill="none" stroke="url(#neon)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)" />
+  <path d="M47.5 18.5 L52 18 L51.5 22.5" fill="none" stroke="url(#neon)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)" />
+
+  <path d="M17 24 L17 33" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" opacity="0.92" />
+  <path d="M46 35 L46 42" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" opacity="0.92" />
+</svg>

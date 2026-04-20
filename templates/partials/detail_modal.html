@@ -3,9 +3,9 @@
     <div class="modal-content">
       <div class="modal-header bg-primary text-white">
         <h5 class="modal-title">
-          <span v-if="detailFund.basic && detailFund.basic.name">{{ detailFund.basic.name }} ({{ detailFund.basic.code }})</span>
-          <span v-else-if="currentFundName">{{ currentFundName }} ({{ currentFundCode }})</span>
-          <span v-else-if="currentFundCode">基金详情 ({{ currentFundCode }})</span>
+          <span v-if="detailFund.basic && detailFund.basic.name">[[ detailFund.basic.name ]] ([[ detailFund.basic.code ]])</span>
+          <span v-else-if="currentFundName">[[ currentFundName ]] ([[ currentFundCode ]])</span>
+          <span v-else-if="currentFundCode">基金详情 ([[ currentFundCode ]])</span>
           <span v-else>基金详情</span>
         </h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -25,7 +25,7 @@
           <div class="skeleton" style="height:16px; width:95%;"></div>
         </div>
         <div v-else-if="detailError" class="text-center text-danger py-5">
-          <p>{{ detailError }}</p>
+          <p>[[ detailError ]]</p>
           <button class="btn btn-primary" @click="loadFundDetail(currentFundCode)">重新加载</button>
         </div>
         <div v-else>
@@ -33,18 +33,24 @@
             <div class="col-md-3 col-6">
               <div class="text-muted small">当前净值</div>
               <div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl)">
-                {{ detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_nav : detailFund.basic.gsz || '-' }}
+                [[ detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_nav : (detailFund.basic.gsz || '-') ]]
                 <span v-if="detailFund.basic.nav_confirmed" class="badge bg-success ms-1" style="font-size:0.5rem">已更新</span>
               </div>
             </div>
             <div class="col-md-3 col-6">
-              <div class="text-muted small">当前涨跌幅</div>
+              <div class="text-muted small">当前涨跌</div>
               <div class="fs-4 fw-bold" :class="getColorClass(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl)">
-                {{ formatChange(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl, 2) }}%
+                [[ formatChange(detailFund.basic.nav_confirmed ? detailFund.basic.confirmed_change : detailFund.basic.gszzl, 2) ]]%
               </div>
             </div>
-            <div class="col-md-3 col-6"><div class="text-muted small">昨日净值</div><div class="fs-4 fw-bold">{{ detailFund.basic.dwjz || '-' }}</div></div>
-            <div class="col-md-3 col-6"><div class="text-muted small">更新时间</div><div class="fs-6">{{ detailFund.basic.nav_confirmed ? detailFund.basic.jzrq : detailFund.basic.gztime || '-' }}</div></div>
+            <div class="col-md-3 col-6">
+              <div class="text-muted small">昨日净值</div>
+              <div class="fs-4 fw-bold">[[ detailFund.basic.dwjz || '-' ]]</div>
+            </div>
+            <div class="col-md-3 col-6">
+              <div class="text-muted small">更新时间</div>
+              <div class="fs-6">[[ detailFund.basic.nav_confirmed ? detailFund.basic.jzrq : (detailFund.basic.gztime || '-') ]]</div>
+            </div>
           </div>
 
           <ul class="nav nav-tabs mb-3" id="detailTabs" role="tablist">
@@ -73,9 +79,9 @@
                   <thead class="table-light"><tr><th>日期</th><th>单位净值</th><th>日涨跌幅</th></tr></thead>
                   <tbody>
                     <tr v-for="item in historyList" :key="item.date">
-                      <td>{{ item.date }}</td>
-                      <td>{{ item.value }}</td>
-                      <td :class="getColorClass(item.change)">{{ formatChange(item.change, 2) }}%</td>
+                      <td>[[ item.date ]]</td>
+                      <td>[[ item.value ]]</td>
+                      <td :class="getColorClass(item.change)">[[ formatChange(item.change, 2) ]]%</td>
                     </tr>
                   </tbody>
                 </table>
@@ -83,7 +89,7 @@
             </div>
 
             <div class="tab-pane fade" id="tab-holding" role="tabpanel">
-              <h6 class="fw-bold mb-3">持仓明细（{{ detailFund.holdings.date || '最新报告期' }}）</h6>
+              <h6 class="fw-bold mb-3">持仓明细（[[ detailFund.holdings.date || '最新报告期' ]]）</h6>
               <div v-if="detailFund.holdings.holdings && detailFund.holdings.holdings.length > 0">
                 <div class="table-responsive">
                   <table class="table table-sm table-striped align-middle">
@@ -98,11 +104,11 @@
                     </thead>
                     <tbody>
                       <tr v-for="(h, i) in detailFund.holdings.holdings" :key="`${h.code}-${i}`">
-                        <td>{{ h.name }}（{{ h.code }}）</td>
-                        <td>{{ h.price }}</td>
-                        <td :class="getColorClass(h.change_pct)">{{ formatChange(h.change_pct, 2) }}%</td>
-                        <td>{{ h.pct }}</td>
-                        <td>{{ h.delta || '-' }}</td>
+                        <td>[[ h.name ]]（[[ h.code ]]）</td>
+                        <td>[[ h.price ]]</td>
+                        <td :class="getColorClass(h.change_pct)">[[ formatChange(h.change_pct, 2) ]]%</td>
+                        <td>[[ h.pct ]]</td>
+                        <td>[[ h.delta || '-' ]]</td>
                       </tr>
                     </tbody>
                   </table>
@@ -113,7 +119,9 @@
           </div>
         </div>
       </div>
-      <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+      </div>
     </div>
   </div>
 </div>

@@ -1,4 +1,5 @@
 const SAVED_CODES_KEY = 'myFundCodes';
+const CLIENT_ID_KEY = 'fundMonitorClientId';
 
 export const EMPTY_DETAIL = () => ({
   basic: {},
@@ -15,8 +16,20 @@ export const loadSavedCodes = () => {
   }
 };
 
-export const saveCodes = (codes) => {
-  localStorage.setItem(SAVED_CODES_KEY, JSON.stringify(codes));
+export const clearSavedCodes = () => {
+  localStorage.removeItem(SAVED_CODES_KEY);
+};
+
+export const loadClientId = () => {
+  try {
+    const existing = localStorage.getItem(CLIENT_ID_KEY);
+    if (existing) return existing;
+    const created = `web_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+    localStorage.setItem(CLIENT_ID_KEY, created);
+    return created;
+  } catch {
+    return `web_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+  }
 };
 
 export const toNumber = (val) => {
@@ -46,17 +59,17 @@ export const getIndexCardClass = (val) => {
 };
 
 export const getSortIcon = (sortDir) => {
-  if (sortDir === 'asc') return '^';
-  if (sortDir === 'desc') return 'v';
+  if (sortDir === 'asc') return '↑';
+  if (sortDir === 'desc') return '↓';
   return '↕';
 };
 
 export const getMarketStatus = (date) => {
   const minutes = date.getHours() * 60 + date.getMinutes();
   if (minutes >= 540 && minutes < 570) return { text: '集合竞价', className: 'market-preopen' };
-  if (minutes >= 570 && minutes < 690) return { text: '开盘中', className: 'market-open' };
-  if (minutes >= 690 && minutes < 780) return { text: '午盘休息', className: 'market-break' };
-  if (minutes >= 780 && minutes < 900) return { text: '开盘中', className: 'market-open' };
+  if (minutes >= 570 && minutes < 690) return { text: '交易中', className: 'market-open' };
+  if (minutes >= 690 && minutes < 780) return { text: '午间休市', className: 'market-break' };
+  if (minutes >= 780 && minutes < 900) return { text: '交易中', className: 'market-open' };
   if (minutes >= 900) return { text: '已收盘', className: 'market-closed' };
   return { text: '未开盘', className: 'market-pending' };
 };

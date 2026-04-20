@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from bs4 import BeautifulSoup
 
@@ -295,9 +295,14 @@ def get_fund_holdings(fund_code):
 
 def get_fund_networth_history(fund_code, days=30):
     code = str(fund_code).zfill(6)
+    days = max(30, min(int(days or 30), 365))
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days)
+    start_date_text = start_date.strftime('%Y-%m-%d')
+    end_date_text = end_date.strftime('%Y-%m-%d')
     try:
         response = http_get(
-            f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize={days}&startDate=&endDate=",
+            f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=400&startDate={start_date_text}&endDate={end_date_text}",
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://fund.eastmoney.com/'},
             timeout=3,
         )
@@ -317,11 +322,14 @@ def get_fund_networth_history(fund_code, days=30):
     try:
         snapshot = get_pingzhongdata_snapshot(code)
         result = []
-        for item in (snapshot.get('networth', []) if snapshot else [])[-days:]:
+        for item in (snapshot.get('networth', []) if snapshot else []):
             if not isinstance(item, dict):
                 continue
             try:
-                result.append({'date': datetime.fromtimestamp(float(item.get('x')) / 1000).strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
+                item_date = datetime.fromtimestamp(float(item.get('x')) / 1000).date()
+                if item_date < start_date or item_date > end_date:
+                    continue
+                result.append({'date': item_date.strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
             except Exception:
                 continue
         return {'success': bool(result), 'data': result}

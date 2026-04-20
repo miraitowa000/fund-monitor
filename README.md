@@ -1,23 +1,23 @@
 # Fund Monitor
 
-一个基于 Flask 的基金实时监控看板，支持按基金代码添加自选、查看估值涨跌、查看持仓和近 30 天净值走势，并展示主要指数行情。
+一个基于 Flask 的基金实时监控看板，支持：
 
-## 功能
-
-- 基金实时估值查询
-- 自选基金列表管理
-- 基金详情弹窗
-- 持仓明细展示
-- 近 30 天净值走势
-- 上证、深证、创业板、科创 50、北证 50 指数行情
-- 自动刷新
+- 自选基金持久化
+- 分组管理
+- 基金详情
+- 持仓明细
+- 历史净值
+- 市场指数概览
 - 移动端适配
-- Docker 部署支持
+- MySQL 持久化
+- Docker 部署
 
 ## 技术栈
 
-- Python 3.9
+- Python 3.9+
 - Flask
+- SQLAlchemy
+- PyMySQL
 - Requests
 - BeautifulSoup4
 - AkShare
@@ -29,18 +29,34 @@
 
 ```text
 fund-monitor/
-├─ app.py
-├─ requirements.txt
-├─ Dockerfile
-├─ docker-compose.yml
-├─ templates/
-│  └─ index.html
-└─ static/
+├── app.py
+├── core/
+├── services/
+├── static/
+├── templates/
+├── requirements.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .env.testing.example
+├── .env.production.example
+└── DEPLOY.md
 ```
 
-## 本地运行
+## 环境区分
 
-1. 创建并激活虚拟环境
+当前项目只区分两个环境：
+
+- `testing`
+- `production`
+
+配置加载规则：
+
+- 本地测试默认使用 `.env.testing`
+- Docker Compose 生产部署固定使用 `.env.production`
+
+## 本地测试
+
+### 1. 创建虚拟环境
 
 ```bash
 python -m venv .venv
@@ -48,37 +64,72 @@ python -m venv .venv
 
 Windows PowerShell:
 
-```bash
+```powershell
 .venv\Scripts\Activate.ps1
 ```
 
-2. 安装依赖
+### 2. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. 启动项目
+### 3. 准备测试配置
 
-```bash
-python app.py
+参考 [.env.testing.example](./.env.testing.example) 创建 `.env.testing`：
+
+```env
+APP_ENV=testing
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=abcd.1234
+DB_NAME=fund_monitor_testing
+DB_CHARSET=utf8mb4
 ```
 
-4. 打开浏览器访问
+注意：
+
+- 数据库需要你先手动创建
+- 应用启动时只会自动创建表，不会自动创建数据库
+
+### 4. 启动项目
+
+```bash
+flask run --host=0.0.0.0 --port=5000
+```
+
+访问地址：
 
 ```text
 http://127.0.0.1:5000
 ```
 
-## Docker 运行
+## 生产部署
 
-### 使用 Docker Compose
+生产环境使用 Docker Compose。
+
+### 1. 准备生产配置
+
+参考 [.env.production.example](./.env.production.example) 创建 `.env.production`：
+
+```env
+APP_ENV=production
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=replace-with-production-password
+DB_NAME=fund_monitor_production
+DB_CHARSET=utf8mb4
+```
+
+### 2. 启动容器
 
 ```bash
 docker compose up -d --build
 ```
 
-默认映射端口：
+默认访问地址：
 
 ```text
 http://127.0.0.1:8065
@@ -90,12 +141,17 @@ http://127.0.0.1:8065
 docker compose down
 ```
 
-### 使用 Docker 命令
+更多生产部署细节见 [DEPLOY.md](./DEPLOY.md)。
 
-```bash
-docker build -t fund-monitor .
-docker run -d --name fund-monitor --restart=always -p 8065:5000 fund-monitor
-```
+## 数据库说明
+
+项目当前使用 MySQL 持久化以下数据：
+
+- 匿名用户
+- 基金分组
+- 用户关注基金
+
+应用启动时会自动执行建表逻辑，但你仍然需要先手动创建数据库。
 
 ## API
 
@@ -103,12 +159,6 @@ docker run -d --name fund-monitor --restart=always -p 8065:5000 fund-monitor
 
 ```http
 GET /health
-```
-
-返回：
-
-```text
-ok
 ```
 
 ### 批量查询基金
@@ -138,38 +188,47 @@ GET /api/indexes
 GET /api/fund/<fund_code>
 ```
 
-例如：
+### 查询当前用户基金与分组
 
 ```http
-GET /api/fund/161725
+GET /api/user/funds-meta
+X-Client-Id: <client_id>
 ```
 
-## 数据来源说明
+### 初始化迁移本地基金
 
-项目依赖第三方公开数据接口，包括但不限于：
+```http
+POST /api/user/bootstrap
+X-Client-Id: <client_id>
+Content-Type: application/json
+```
 
-- 东方财富
-- 新浪行情
-- AkShare
+### 创建分组
 
-第三方接口出现限流、超时、结构变更时，页面可能出现空数据、延迟或短暂异常。
+```http
+POST /api/user/groups
+X-Client-Id: <client_id>
+Content-Type: application/json
+```
 
-## 部署说明
+### 添加或更新基金分组
 
-仓库已包含以下部署文件：
+```http
+POST /api/user/funds
+X-Client-Id: <client_id>
+Content-Type: application/json
+```
 
-- [Dockerfile](./Dockerfile)
-- [docker-compose.yml](./docker-compose.yml)
-- [DEPLOY.md](./DEPLOY.md)
+### 移动基金分组
 
-如果你准备部署到云服务器，优先使用 `docker compose`。
+```http
+PUT /api/user/funds/<fund_code>/group
+X-Client-Id: <client_id>
+Content-Type: application/json
+```
 
 ## 开发说明
 
-- 后端入口文件是 [app.py](./app.py)
-- 前端页面是 [templates/index.html](./templates/index.html)
-- 当前没有拆分前后端，是一个轻量单体应用
-
-## License
-
-暂未声明。如需开源许可，建议补充 `MIT` License。
+- 后端入口：[app.py](./app.py)
+- 配置入口：[core/settings.py](./core/settings.py)
+- 前端页面入口：[templates/index.html](./templates/index.html)
