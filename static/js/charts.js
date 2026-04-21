@@ -15,6 +15,16 @@ const disposeChart = (chart) => {
   return null;
 };
 
+const LUNCH_START_INDEX = minuteToIndex('11:33');
+const LUNCH_END_INDEX = minuteToIndex('12:57');
+
+const isLunchBreak = (minute) => {
+  const [h, m] = String(minute || '').split(':').map((v) => parseInt(v, 10));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
+  const total = h * 60 + m;
+  return total > 690 && total < 780;
+};
+
 const buildIntradaySeries = (fundCode, intradayFallback) => {
   const labels = TRADING_MINUTES.slice();
   const points = {};
@@ -42,19 +52,46 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
     if (Number.isFinite(value)) known.push({ idx, value });
   });
 
-  if (known.length === 0) return null;
+  if (known.length === 0) {
+    const fallbackPoint = Array.isArray(intradayFallback?.data)
+      ? intradayFallback.data.find((point) => Number.isFinite(parseFloat(point?.value)))
+      : null;
+    const fallbackValue = parseFloat(fallbackPoint?.value);
+    if (!Number.isFinite(fallbackValue)) return null;
+    const values = labels.map(() => Number(fallbackValue.toFixed(4)));
+    const currentIdx = Math.max(minuteToIndex(formatMinuteNow()), 0);
+    for (let i = currentIdx + 1; i < values.length; i += 1) {
+      values[i] = null;
+    }
+    return { labels, values, currentIdx };
+  }
 
   const values = new Array(labels.length).fill(null);
   known.forEach((point) => {
     values[point.idx] = Number(point.value.toFixed(4));
   });
 
-  const currentIdx = minuteToIndex(formatMinuteNow());
+  const nowMinute = formatMinuteNow();
+  let currentIdx = minuteToIndex(nowMinute);
   let lastKnown = null;
   for (let i = 0; i <= currentIdx; i += 1) {
     if (Number.isFinite(values[i])) lastKnown = values[i];
     else if (lastKnown !== null) values[i] = lastKnown;
   }
+
+  // During the lunch break, keep the 11:30 estimate flat until 13:00
+  // instead of dropping the chart to an implicit zero/null region.
+  const lunchAnchor = values[LUNCH_START_INDEX - 1] ?? values[LUNCH_START_INDEX] ?? lastKnown;
+  if (Number.isFinite(lunchAnchor)) {
+    for (let i = LUNCH_START_INDEX; i <= LUNCH_END_INDEX; i += 1) {
+      values[i] = lunchAnchor;
+    }
+  }
+
+  if (isLunchBreak(nowMinute)) {
+    currentIdx = Math.max(currentIdx, LUNCH_END_INDEX);
+  }
+
   for (let i = currentIdx + 1; i < values.length; i += 1) {
     values[i] = null;
   }
@@ -69,16 +106,37 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
   const series = buildIntradaySeries(fundCode, intradayData);
   intradayChartInstance = disposeChart(intradayChartInstance);
   if (!series) {
-    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无当日走势数据，先刷新几次后再查看详情</div>';
+    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无当日走势数据，稍后刷新后再查看。</div>';
     return;
   }
 
   chartEl.innerHTML = '';
   const base = basic ? parseFloat(basic.dwjz) : NaN;
-  const pctValues = series.values.map((value) => {
+  const fallbackChange = basic ? parseFloat(basic.confirmed_change || basic.gszzl) : NaN;
+  let pctValues = series.values.map((value) => {
     if (value === null || !Number.isFinite(value) || !Number.isFinite(base) || base === 0) return null;
     return Number((((value - base) / base) * 100).toFixed(4));
   });
+
+  // For overseas/QDII funds that do not provide intra-day snapshots,
+  // keep a flat line based on the current list/detail change percentage.
+  if (!pctValues.some((value) => Number.isFinite(value))) {
+    if (Number.isFinite(fallbackChange)) {
+      pctValues = series.values.map((value) => (value === null ? null : Number(fallbackChange.toFixed(4))));
+    }
+  }
+
+  const finitePctValues = pctValues.filter((value) => Number.isFinite(value));
+  const nearZeroSeries = finitePctValues.length > 0 && finitePctValues.every((value) => Math.abs(value) < 0.0001);
+  if (nearZeroSeries && Number.isFinite(fallbackChange) && Math.abs(fallbackChange) >= 0.0001) {
+    pctValues = series.values.map((value) => (value === null ? null : Number(fallbackChange.toFixed(4))));
+  }
+
+  if (!pctValues.some((value) => Number.isFinite(value))) {
+    intradayChartInstance = disposeChart(intradayChartInstance);
+    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无有效走势数据，请稍后刷新后再查看。</div>';
+    return;
+  }
 
   intradayChartInstance = echarts.init(chartEl);
   intradayChartInstance.setOption({
@@ -116,10 +174,9 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
       data: pctValues,
       type: 'line',
       smooth: false,
-      showSymbol: true,
-      symbolSize: 5,
+      showSymbol: false,
       connectNulls: false,
-      lineStyle: { width: 2, color: '#dc3545' }
+      lineStyle: { width: 2, color: '#e5484d' }
     }]
   });
 };
@@ -129,14 +186,17 @@ export const renderHistoryChart = (historyData) => {
   if (!chartEl) return;
 
   const rows = historyData && Array.isArray(historyData.data) ? historyData.data : [];
-  historyChartInstance = disposeChart(historyChartInstance);
   if (rows.length === 0) {
-    chartEl.innerHTML = '<div class="text-muted text-center py-4">暂无近 30 天历史净值数据</div>';
+    historyChartInstance = disposeChart(historyChartInstance);
+    chartEl.innerHTML = '<div class="text-muted text-center py-4">暂无近 30 天历史净值数据。</div>';
     return;
   }
 
-  chartEl.innerHTML = '';
-  historyChartInstance = echarts.init(chartEl);
+  if (!historyChartInstance) {
+    chartEl.innerHTML = '';
+    historyChartInstance = echarts.init(chartEl);
+  }
+
   historyChartInstance.setOption({
     tooltip: {
       trigger: 'axis',
@@ -157,9 +217,9 @@ export const renderHistoryChart = (historyData) => {
       type: 'line',
       smooth: true,
       showSymbol: false,
-      lineStyle: { width: 2, color: '#0d6efd' }
+      lineStyle: { width: 2, color: '#1677ff' }
     }]
-  });
+  }, true);
 };
 
 export const resizeDetailCharts = () => {

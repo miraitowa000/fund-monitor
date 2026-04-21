@@ -11,9 +11,6 @@ COPY requirements.txt .
 # 使用清华源加速安装（可选）
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 还需要安装 gunicorn 用于生产环境部署
-RUN pip install gunicorn
-
 # 复制当前目录下的所有文件到工作目录
 COPY . .
 

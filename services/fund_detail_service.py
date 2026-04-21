@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from bs4 import BeautifulSoup
 
@@ -295,21 +295,56 @@ def get_fund_holdings(fund_code):
 
 def get_fund_networth_history(fund_code, days=30):
     code = str(fund_code).zfill(6)
+    days = max(30, min(int(days or 30), 365))
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days)
+    start_date_text = start_date.strftime('%Y-%m-%d')
+    end_date_text = end_date.strftime('%Y-%m-%d')
     try:
-        response = http_get(
-            f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize={days}&startDate=&endDate=",
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://fund.eastmoney.com/'},
-            timeout=3,
-        )
-        if response.status_code != 200:
-            return {'success': False, 'data': []}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://fund.eastmoney.com/',
+        }
         result = []
-        for item in response.json().get('Data', {}).get('LSJZList', []):
-            try:
-                result.append({'date': item.get('FSRQ', ''), 'value': float(item.get('DWJZ', 0)), 'change': item.get('JZZZL', '0')})
-            except Exception:
-                continue
-        result.reverse()
+        seen_dates = set()
+        page_index = 1
+        page_size = 100
+
+        while page_index <= 5:
+            response = http_get(
+                f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex={page_index}&pageSize={page_size}&startDate={start_date_text}&endDate={end_date_text}",
+                headers=headers,
+                timeout=3,
+            )
+            if response.status_code != 200:
+                return {'success': False, 'data': []}
+
+            payload = response.json()
+            data_block = payload.get('Data') or {}
+            page_items = data_block.get('LSJZList') or []
+            if not page_items:
+                break
+
+            for item in page_items:
+                try:
+                    item_date = item.get('FSRQ', '')
+                    if not item_date or item_date in seen_dates:
+                        continue
+                    seen_dates.add(item_date)
+                    result.append({
+                        'date': item_date,
+                        'value': float(item.get('DWJZ', 0)),
+                        'change': item.get('JZZZL', '0'),
+                    })
+                except Exception:
+                    continue
+
+            total_count = int(payload.get('TotalCount') or 0)
+            if len(result) >= total_count or len(page_items) < page_size:
+                break
+            page_index += 1
+
+        result.sort(key=lambda item: item.get('date', ''))
         if result:
             return {'success': True, 'data': result}
     except Exception as e:
@@ -317,11 +352,14 @@ def get_fund_networth_history(fund_code, days=30):
     try:
         snapshot = get_pingzhongdata_snapshot(code)
         result = []
-        for item in (snapshot.get('networth', []) if snapshot else [])[-days:]:
+        for item in (snapshot.get('networth', []) if snapshot else []):
             if not isinstance(item, dict):
                 continue
             try:
-                result.append({'date': datetime.fromtimestamp(float(item.get('x')) / 1000).strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
+                item_date = datetime.fromtimestamp(float(item.get('x')) / 1000).date()
+                if item_date < start_date or item_date > end_date:
+                    continue
+                result.append({'date': item_date.strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
             except Exception:
                 continue
         return {'success': bool(result), 'data': result}

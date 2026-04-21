@@ -6,11 +6,17 @@ __pycache__/
 .venv/
 venv/
 env/
+.idea/
+.claude/
+.playwright-mcp/
 
 .pytest_cache/
 .mypy_cache/
 
 .npm-cache/
+.env
+.env.testing
+.env.production
 
 .DS_Store
 Thumbs.db

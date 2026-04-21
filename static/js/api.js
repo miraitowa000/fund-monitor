@@ -5,6 +5,11 @@ import {
   saveFundSnapshotsToCache,
 } from './cache.js';
 
+const withClientHeaders = (clientId, headers = {}) => ({
+  ...headers,
+  'X-Client-Id': clientId
+});
+
 export const fetchFundsRaw = async (codes) => {
   try {
     if (!codes || codes.length === 0) return [];
@@ -15,7 +20,7 @@ export const fetchFundsRaw = async (codes) => {
     });
 
     if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
-      console.warn('获取基金数据失败（状态码:', response.status, '），返回本地缓存数据');
+      console.warn('获取基金数据失败，回退到本地缓存', response.status);
       return loadFundListFromCache() || [];
     }
 
@@ -36,12 +41,85 @@ export const fetchIndexesRaw = async () => {
     const response = await fetch('/api/indexes');
     return await response.json();
   } catch (error) {
-    console.error('指数获取失败:', error);
+    console.error('获取指数数据失败:', error);
     return [];
   }
 };
 
 export const loadFundDetail = async (code) => {
   const response = await fetch(`/api/fund/${code}`);
+  return await response.json();
+};
+
+export const loadFundHistory = async (code, days) => {
+  const response = await fetch(`/api/fund/${code}/history?days=${days}`);
+  return await response.json();
+};
+
+export const fetchUserFundsMeta = async (clientId) => {
+  const response = await fetch('/api/user/funds-meta', {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const bootstrapUserFunds = async (clientId, codes) => {
+  const response = await fetch('/api/user/bootstrap', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ codes })
+  });
+  return await response.json();
+};
+
+export const createFundGroup = async (clientId, name) => {
+  const response = await fetch('/api/user/groups', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name })
+  });
+  return await response.json();
+};
+
+export const renameFundGroup = async (clientId, groupId, name) => {
+  const response = await fetch(`/api/user/groups/${groupId}`, {
+    method: 'PUT',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name })
+  });
+  return await response.json();
+};
+
+export const deleteFundGroup = async (clientId, groupId) => {
+  const response = await fetch(`/api/user/groups/${groupId}`, {
+    method: 'DELETE',
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const saveUserFund = async (clientId, code, groupId) => {
+  const response = await fetch('/api/user/funds', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ code, group_id: groupId || null })
+  });
+  return await response.json();
+};
+
+export const moveUserFundGroup = async (clientId, code, groupId) => {
+  const response = await fetch(`/api/user/funds/${code}/group`, {
+    method: 'PUT',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ group_id: groupId })
+  });
+  return await response.json();
+};
+
+export const deleteUserFund = async (clientId, code) => {
+  const response = await fetch(`/api/user/funds/${code}`, {
+    method: 'DELETE',
+    headers: withClientHeaders(clientId)
+  });
   return await response.json();
 };

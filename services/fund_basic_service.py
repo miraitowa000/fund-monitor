@@ -35,7 +35,23 @@ _BG_THREAD = None
 _BG_THREAD_LOCK = threading.Lock()
 
 
-def _build_basic_payload(code, name, gsz='-', gszzl='-', gztime='-', dwjz='-', jzrq='-', success=False, message='', nav_confirmed=False, confirmed_nav='', confirmed_change=''):
+def _build_basic_payload(
+    code,
+    name,
+    gsz='-',
+    gszzl='-',
+    gztime='-',
+    dwjz='-',
+    jzrq='-',
+    success=False,
+    message='',
+    nav_confirmed=False,
+    confirmed_nav='',
+    confirmed_change='',
+    display_date='-',
+    confirmed_date='-',
+    base_date='-',
+):
     return {
         'code': code,
         'name': name,
@@ -49,6 +65,9 @@ def _build_basic_payload(code, name, gsz='-', gszzl='-', gztime='-', dwjz='-', j
         'nav_confirmed': nav_confirmed,
         'confirmed_nav': confirmed_nav,
         'confirmed_change': confirmed_change,
+        'display_date': display_date,
+        'confirmed_date': confirmed_date,
+        'base_date': base_date,
     }
 
 
@@ -182,17 +201,22 @@ def _is_qdii_like_snapshot(snapshot):
 
 def _build_snapshot_estimate(code, fallback_name, snapshot, message):
     latest_date = snapshot.get('latest_date', '-') if snapshot else '-'
-    return _build_basic_payload(
+    return _sync_confirmation_fields(_build_basic_payload(
         code=code,
         name=snapshot.get('name') if snapshot and snapshot.get('name') else fallback_name,
         gsz=snapshot.get('latest_value', '-') if snapshot else '-',
         gszzl=snapshot.get('latest_change', '-') if snapshot else '-',
         gztime=latest_date or '-',
         dwjz=snapshot.get('previous_value', '-') if snapshot else '-',
-        jzrq=snapshot.get('previous_date', latest_date) if snapshot else '-',
+        jzrq=latest_date or '-',
         success=False,
         message=message,
-    )
+        confirmed_nav=snapshot.get('latest_value', '-') if snapshot else '-',
+        confirmed_change=snapshot.get('latest_change', '-') if snapshot else '-',
+        display_date=latest_date or '-',
+        confirmed_date=latest_date or '-',
+        base_date=snapshot.get('previous_date', latest_date) if snapshot else '-',
+    ))
 
 
 def _load_pingzhong_fallback(code, fallback_name, message):
@@ -213,6 +237,9 @@ def _load_pingzhong_fallback(code, fallback_name, message):
         jzrq=snapshot.get('latest_date', '-') if snapshot else '-',
         success=False,
         message=message,
+        display_date='-',
+        confirmed_date=snapshot.get('latest_date', '-') if snapshot else '-',
+        base_date=snapshot.get('latest_date', '-') if snapshot else '-',
     )
 
 
@@ -241,6 +268,35 @@ def _should_check_confirmed_nav(fund_name):
     return not _is_trading_hours()
 
 
+def _date_text(date_text):
+    raw = str(date_text or '').strip()
+    if not raw or raw == '-':
+        return '-'
+    return raw.split(' ')[0]
+
+
+def _sync_confirmation_fields(result):
+    display_date = _date_text(result.get('display_date') or result.get('gztime'))
+    confirmed_date = _date_text(result.get('confirmed_date') or result.get('jzrq'))
+    base_date = _date_text(result.get('base_date') or result.get('jzrq'))
+
+    result['display_date'] = display_date
+    result['confirmed_date'] = confirmed_date
+    result['base_date'] = base_date
+
+    is_confirmed = display_date != '-' and confirmed_date != '-' and display_date == confirmed_date
+    result['nav_confirmed'] = is_confirmed
+
+    if is_confirmed:
+        result['confirmed_nav'] = str(result.get('confirmed_nav') or result.get('gsz') or '')
+        result['confirmed_change'] = str(result.get('confirmed_change') or result.get('gszzl') or '')
+    else:
+        result['confirmed_nav'] = str(result.get('confirmed_nav') or '')
+        result['confirmed_change'] = str(result.get('confirmed_change') or '')
+
+    return result
+
+
 def _enrich_confirmed_nav(code, result):
     today = datetime.now().strftime('%Y-%m-%d')
     fund_name = result.get('name', '')
@@ -248,7 +304,7 @@ def _enrich_confirmed_nav(code, result):
     # 判断是否需要查询历史接口
     if not _should_check_confirmed_nav(fund_name):
         # 交易时段，使用估算值
-        return result
+        return _sync_confirmation_fields(result)
 
     # 非交易时段或 QDII 基金，查询历史接口
     try:
@@ -258,26 +314,27 @@ def _enrich_confirmed_nav(code, result):
         if history_result.get('success') and history_result.get('data'):
             history_data = history_result['data']
             if not history_data:
-                return result
+                return _sync_confirmation_fields(result)
 
             latest = history_data[-1]
 
             # 如果最新记录是今天，说明官方净值已公布
             if latest and latest.get('date') == today:
-                result['nav_confirmed'] = True
                 result['confirmed_nav'] = str(latest.get('value', ''))
                 result['confirmed_change'] = str(latest.get('change', ''))
                 result['jzrq'] = today
+                result['confirmed_date'] = today
                 # 获取前一天净值作为"昨日净值"
                 if len(history_data) >= 2:
                     previous = history_data[-2]
                     result['dwjz'] = str(previous.get('value', result.get('dwjz')))
+                    result['base_date'] = previous.get('date', result.get('base_date'))
     except Exception as e:
         # 静默失败，保持估算值
         # 可以在这里添加日志记录：print(f"查询历史净值失败 {code}: {e}")
         pass
 
-    return result
+    return _sync_confirmation_fields(result)
 
 
 def get_fund_estimate(fund_code):
@@ -304,6 +361,9 @@ def get_fund_estimate(fund_code):
             dwjz=data.get('dwjz'),
             jzrq=data.get('jzrq'),
             success=True,
+            display_date=_date_text(data.get('gztime')),
+            confirmed_date=_date_text(data.get('jzrq')),
+            base_date=_date_text(data.get('jzrq')),
         )
         return _enrich_confirmed_nav(code, result)
     except Exception as e:
@@ -336,6 +396,9 @@ def build_timeout_placeholder(code):
         jzrq='-',
         success=False,
         message='请求超时，请稍后刷新',
+        display_date='-',
+        confirmed_date='-',
+        base_date='-',
     )
 
 
@@ -356,7 +419,7 @@ def load_basic_for_detail(code, request_timeout=DETAIL_REQUEST_TIMEOUT_SECONDS):
     return stale_basic if stale_basic else build_timeout_placeholder(code)
 
 
-def fetch_funds_parallel(codes, request_timeout=8):
+def fetch_funds_parallel(codes, request_timeout=15):
     norm_codes = [str(c).zfill(6) for c in codes]
     results_map = {}
     to_fetch = []

@@ -1,0 +1,19 @@
+<div v-if="releaseNoticeOpen" class="release-notice-overlay" @click.self="confirmReleaseNotice">
+  <section class="release-notice-modal" aria-label="版本升级公告">
+    <div class="release-notice-modal__hero">
+      <div class="release-notice-badge">Release Note</div>
+      <h2 class="release-notice-title">本次升级</h2>
+    </div>
+
+    <div class="release-notice-body">
+      <article class="release-notice-item" v-for="item in releaseNoticeItems" :key="item.id">
+        <div class="release-notice-item__index">[[ item.id ]]</div>
+        <div class="release-notice-item__title">[[ item.text ]]</div>
+      </article>
+    </div>
+
+    <div class="release-notice-footer">
+      <button type="button" class="release-notice-confirm" @click="confirmReleaseNotice">我知道了</button>
+    </div>
+  </section>
+</div>
