@@ -301,20 +301,50 @@ def get_fund_networth_history(fund_code, days=30):
     start_date_text = start_date.strftime('%Y-%m-%d')
     end_date_text = end_date.strftime('%Y-%m-%d')
     try:
-        response = http_get(
-            f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex=1&pageSize=400&startDate={start_date_text}&endDate={end_date_text}",
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'https://fund.eastmoney.com/'},
-            timeout=3,
-        )
-        if response.status_code != 200:
-            return {'success': False, 'data': []}
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://fund.eastmoney.com/',
+        }
         result = []
-        for item in response.json().get('Data', {}).get('LSJZList', []):
-            try:
-                result.append({'date': item.get('FSRQ', ''), 'value': float(item.get('DWJZ', 0)), 'change': item.get('JZZZL', '0')})
-            except Exception:
-                continue
-        result.reverse()
+        seen_dates = set()
+        page_index = 1
+        page_size = 100
+
+        while page_index <= 5:
+            response = http_get(
+                f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex={page_index}&pageSize={page_size}&startDate={start_date_text}&endDate={end_date_text}",
+                headers=headers,
+                timeout=3,
+            )
+            if response.status_code != 200:
+                return {'success': False, 'data': []}
+
+            payload = response.json()
+            data_block = payload.get('Data') or {}
+            page_items = data_block.get('LSJZList') or []
+            if not page_items:
+                break
+
+            for item in page_items:
+                try:
+                    item_date = item.get('FSRQ', '')
+                    if not item_date or item_date in seen_dates:
+                        continue
+                    seen_dates.add(item_date)
+                    result.append({
+                        'date': item_date,
+                        'value': float(item.get('DWJZ', 0)),
+                        'change': item.get('JZZZL', '0'),
+                    })
+                except Exception:
+                    continue
+
+            total_count = int(payload.get('TotalCount') or 0)
+            if len(result) >= total_count or len(page_items) < page_size:
+                break
+            page_index += 1
+
+        result.sort(key=lambda item: item.get('date', ''))
         if result:
             return {'success': True, 'data': result}
     except Exception as e:

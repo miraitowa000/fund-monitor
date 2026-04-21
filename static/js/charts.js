@@ -134,7 +134,7 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
 
   if (!pctValues.some((value) => Number.isFinite(value))) {
     intradayChartInstance = disposeChart(intradayChartInstance);
-    chartEl.innerHTML = '<div class="text-muted text-center py-5">鏆傛棤褰撴棩璧板娍鏁版嵁锛岀◢鍚庡埛鏂板悗鍐嶆煡鐪嬨€?/div>';
+    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无有效走势数据，请稍后刷新后再查看。</div>';
     return;
   }
 

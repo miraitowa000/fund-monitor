@@ -187,13 +187,12 @@
                   <button type="button" class="table-link" @click.stop="showDetail(fund.code)">[[ fund.code ]]</button>
                 </td>
                 <td>
-                  <div class="fund-name-cell">
+<div class="fund-name-cell">
                     <div class="fund-name-line">
                       <button type="button" class="table-link table-link--name" @click.stop="showDetail(fund.code)">[[ fund.name ]]</button>
-                      <span v-if="fund.nav_confirmed" class="tiny-badge success">已更新</span>
                     </div>
                     <div class="fund-name-meta">
-                      <span class="tiny-badge">[[ fundMetaMap[fund.code]?.group_name || '未分组' ]]</span>
+                      <span v-if="fund.nav_confirmed" class="tiny-badge success">已更新</span>
                     </div>
                   </div>
                 </td>
