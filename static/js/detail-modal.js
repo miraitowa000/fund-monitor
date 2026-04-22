@@ -1,5 +1,5 @@
 import { loadFundDetail as fetchFundDetail } from './api.js';
-import { renderHistoryChart, renderIntradayChart, resizeDetailCharts } from './charts.js';
+import { renderIntradayChart, resizeDetailCharts } from './charts.js';
 import { EMPTY_DETAIL } from './formatters.js';
 
 const hasDetailData = (data) => {
@@ -21,6 +21,8 @@ export const createDetailController = ({
   hasLoadedAnyDetail,
   pendingFundCode,
 }) => {
+  let latestDetailRequestId = 0;
+
   const renderDetailVisuals = async () => {
     if (!currentFundCode.value) return;
     await nextTick();
@@ -29,16 +31,20 @@ export const createDetailController = ({
       detailBasicView?.value || detailFund.value.basic,
       detailFund.value.intraday
     );
-    renderHistoryChart(detailFund.value.history);
     resizeDetailCharts();
   };
 
   const loadDetail = async (code) => {
+    const requestId = latestDetailRequestId + 1;
+    latestDetailRequestId = requestId;
     detailLoading.value = true;
     detailError.value = '';
+
     try {
       const hit = (funds.value || []).find((fund) => fund.code === code);
       const data = await fetchFundDetail(code);
+      if (requestId !== latestDetailRequestId) return;
+
       if (hasDetailData(data)) {
         currentFundCode.value = code;
         currentFundName.value = hit?.name || data.basic?.name || '';
@@ -48,15 +54,19 @@ export const createDetailController = ({
         await renderDetailVisuals();
         return;
       }
+
       detailError.value = '获取基金详情失败，请稍后重试。';
     } catch (error) {
+      if (requestId !== latestDetailRequestId) return;
       console.error('详情获取失败:', error);
       detailError.value = '网络异常，请检查连接后重试。';
     } finally {
-      if (pendingFundCode.value === code) {
+      if (requestId === latestDetailRequestId && pendingFundCode.value === code) {
         pendingFundCode.value = '';
       }
-      detailLoading.value = false;
+      if (requestId === latestDetailRequestId) {
+        detailLoading.value = false;
+      }
     }
   };
 

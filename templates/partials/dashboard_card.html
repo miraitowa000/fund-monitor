@@ -22,7 +22,7 @@
       <section class="summary-panel">
         <div class="section-head">
           <div>
-            <h2>组合概览</h2>
+            <h2>收益概览</h2>
           </div>
           <div class="section-head__actions">
             <button type="button" class="ghost-action-btn summary-refresh-btn" @click="fetchData">刷新全部</button>
@@ -30,11 +30,15 @@
         </div>
 
         <div class="summary-grid">
-          <article class="summary-card" v-for="item in monitorSummaryCards" :key="item.key">
+          <article class="summary-card" v-for="item in portfolioSummaryCards" :key="item.key">
             <div class="summary-card__label">[[ item.label ]]</div>
             <div class="summary-card__value" :class="item.valueClass">[[ item.value ]]</div>
-            <div class="summary-card__meta">[[ item.meta ]]</div>
+            <div class="summary-card__meta" :class="item.metaClass || ''">[[ item.meta ]]</div>
           </article>
+        </div>
+
+        <div class="summary-chart-wrap">
+          <div id="portfolioProfitChart" class="chart-surface chart-surface--portfolio"></div>
         </div>
       </section>
 
@@ -62,12 +66,21 @@
             </article>
           </div>
         </div>
-        <div class="market-grid" v-else-if="loading">
+        <div class="market-grid desktop-only" v-else-if="loading">
           <article class="market-card market-card--skeleton" v-for="n in 5" :key="`idx-skeleton-${n}`">
             <div class="skeleton" style="height:14px; width:45%;"></div>
             <div class="skeleton mt-3" style="height:28px; width:70%;"></div>
             <div class="skeleton mt-3" style="height:16px; width:85%;"></div>
           </article>
+        </div>
+        <div class="market-ticker mobile-only" v-else-if="loading">
+          <div class="market-ticker__track market-ticker__track--loading">
+            <article class="market-ticker__item market-card--skeleton" v-for="n in 6" :key="`idx-mobile-skeleton-${n}`">
+              <div class="skeleton" style="height:14px; width:72px;"></div>
+              <div class="skeleton" style="height:16px; width:64px;"></div>
+              <div class="skeleton" style="height:14px; width:54px;"></div>
+            </article>
+          </div>
         </div>
         <div class="empty-state compact" v-else>暂无指数数据</div>
       </section>
@@ -89,7 +102,7 @@
           </div>
           <div class="action-cluster">
             <button type="button" class="ghost-action-btn" @click="fetchData">刷新</button>
-            <button type="button" class="ghost-action-btn danger" @click="clearAll" v-if="savedCodes.length > 0">清空</button>
+            <button type="button" class="ghost-action-btn danger" @click="openClearAllModal" v-if="savedCodes.length > 0">清空</button>
           </div>
         </div>
 
@@ -166,12 +179,12 @@
             <thead>
               <tr>
                 <th>代码</th>
-                <th>名称</th>
-                <th>当前净值</th>
-                <th class="sortable" @click="toggleSort">当前涨跌 <span class="sort-icon">[[ sortIcon ]]</span></th>
-                <th>分组</th>
+                <th>基金名称</th>
+                <th class="sortable" @click="toggleSort">今日涨跌 <span class="sort-icon">[[ sortIcon ]]</span></th>
+                <th>当日收益</th>
+                <th>持有收益</th>
+                <th>仓位占比</th>
                 <th>更新时间</th>
-                <th>昨日净值</th>
                 <th class="align-right">操作</th>
               </tr>
             </thead>
@@ -185,6 +198,7 @@
               >
                 <td class="cell-code">
                   <button type="button" class="table-link" @click.stop="showDetail(fund.code)">[[ fund.code ]]</button>
+                  <div v-if="fund.nav_confirmed" class="fund-nav-status confirmed">[[ '已更新' ]]</div>
                 </td>
                 <td>
 <div class="fund-name-cell">
@@ -192,41 +206,40 @@
                       <button type="button" class="table-link table-link--name" @click.stop="showDetail(fund.code)">[[ fund.name ]]</button>
                     </div>
                     <div class="fund-name-meta">
-                      <span v-if="fund.nav_confirmed" class="tiny-badge success">已更新</span>
+                      <span>[[ fund.has_position ? formatCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                      <span>[[ fund.group_name || '-' ]]</span>
                     </div>
                   </div>
-                </td>
-                <td>
-                  <div class="cell-main">[[ fund.nav_confirmed ? fund.confirmed_nav : fund.gsz ]]</div>
                 </td>
                 <td :class="getColorClass(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl)">
                   <div class="cell-main">[[ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) ]]%</div>
                 </td>
-                <td>
-                  <div v-if="editingFundCode !== fund.code" class="fund-group-display">
-                    <span class="fund-group-name">[[ fundMetaMap[fund.code]?.group_name || '-' ]]</span>
-                    <button type="button" class="fund-group-edit-btn" title="修改分组" @click.stop="startEditFundGroup(fund.code)">
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M11.7 1.3a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4l-7.9 7.9-3.3.8.8-3.3 7.4-7.4zM10.3 2.7 3.9 9.1l-.4 1.6 1.6-.4 6.4-6.4-1.2-1.2z"/>
-                      </svg>
-                    </button>
-                  </div>
-                  <select
-                    v-else
-                    class="table-group-select"
-                    :value="String(fundMetaMap[fund.code]?.group_id || '')"
-                    @change="changeFundGroup(fund.code, $event.target.value)"
-                    @blur="stopEditFundGroup(fund.code)"
-                    @click.stop
-                  >
-                    <option v-for="group in fundGroups" :key="group.id" :value="String(group.id)">[[ group.name ]]</option>
-                  </select>
+                <td :class="getColorClass(fund.daily_profit)">
+                  <div class="cell-main">[[ formatCurrency(fund.daily_profit) ]]</div>
                 </td>
-                <td class="cell-muted">[[ fund.nav_confirmed ? fund.jzrq : fund.gztime ]]</td>
-                <td class="cell-muted">[[ fund.dwjz ]]</td>
+                <td :class="getColorClass(fund.holding_profit)">
+                  <div class="cell-main">[[ formatCurrency(fund.holding_profit) ]]</div>
+                  <div class="cell-muted" :class="getColorClass(fund.holding_profit_rate)">[[ formatPercentText(fund.holding_profit_rate) ]]</div>
+                </td>
+                <td>
+                  <div class="position-ratio-cell" v-if="fund.position_ratio != null">
+                    <div class="position-ratio-cell__value">[[ formatPercentText(fund.position_ratio) ]]</div>
+                    <div class="position-ratio-bar">
+                      <span class="position-ratio-bar__fill" :style="{ width: `${Math.max(0, Math.min(100, Number((fund.position_ratio * 100).toFixed(2))))}%` }"></span>
+                    </div>
+                  </div>
+                  <div class="cell-muted" v-else>-</div>
+                </td>
+                <td class="cell-muted">[[ fund.current_nav_date || (fund.nav_confirmed ? fund.jzrq : fund.gztime) || '-' ]]</td>
                 <td>
                   <div class="table-actions">
-                    <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="removeFund(fund.code)">
+                    <button type="button" class="table-icon-btn" title="编辑持仓" aria-label="编辑持仓" @click.stop="openPositionModal(fund)">
+                      <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 20h4l10-10-4-4L4 16v4"></path>
+                        <path d="M13 7l4 4"></path>
+                      </svg>
+                    </button>
+                    <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="openDeleteFundModal(fund)">
                       <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 7h16"></path>
                         <path d="M9 7V5h6v2"></path>
@@ -261,14 +274,23 @@
                 <div class="mobile-fund-card__main">
                   <div class="fund-name-line">
                     <button type="button" class="table-link table-link--name" @click.stop="showDetail(fund.code)">[[ fund.name ]]</button>
-                    <span v-if="fund.nav_confirmed" class="tiny-badge success">已更新</span>
+                    <span v-if="fund.nav_confirmed" class="fund-nav-status fund-nav-status--inline confirmed">[[ '已更新' ]]</span>
+                  </div>
+                  <div class="mobile-fund-card__amount">
+                    [[ fund.has_position ? formatCurrency(fund.holding_amount) : '¥0.00' ]]
                   </div>
                   <div class="mobile-fund-card__subline">
-                    <span class="mobile-fund-card__code">代码：[[ fund.code ]]</span>
+                    <span class="mobile-fund-card__code">代码 [[ fund.code ]]</span>
                   </div>
                 </div>
                 <div class="mobile-fund-card__actions">
-                  <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="removeFund(fund.code)">
+                  <button type="button" class="table-icon-btn" title="编辑持仓" aria-label="编辑持仓" @click.stop="openPositionModal(fund)">
+                    <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 20h4l10-10-4-4L4 16v4"></path>
+                      <path d="M13 7l4 4"></path>
+                    </svg>
+                  </button>
+                  <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="openDeleteFundModal(fund)">
                     <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 7h16"></path>
                       <path d="M9 7V5h6v2"></path>
@@ -282,22 +304,27 @@
               <div class="mobile-fund-card__body">
                 <div class="mobile-fund-card__metrics">
                   <div class="mobile-fund-metric">
-                    <span class="mobile-fund-metric__label">当前净值</span>
-                    <strong class="mobile-fund-metric__value">[[ fund.nav_confirmed ? fund.confirmed_nav : fund.gsz ]]</strong>
+                    <span class="mobile-fund-metric__label">当日收益</span>
+                    <strong class="mobile-fund-metric__value" :class="getColorClass(fund.daily_profit)">
+                      [[ formatCurrency(fund.daily_profit) ]]
+                    </strong>
+                    <div class="cell-muted">[[ formatPercentText(fund.daily_profit_rate) ]]</div>
                   </div>
                   <div class="mobile-fund-metric">
-                    <span class="mobile-fund-metric__label">当前涨跌</span>
-                    <strong class="mobile-fund-metric__value" :class="getColorClass(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl)">
-                      [[ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) ]]%
+                    <span class="mobile-fund-metric__label">持有收益</span>
+                    <strong class="mobile-fund-metric__value" :class="getColorClass(fund.holding_profit)">
+                      [[ formatCurrency(fund.holding_profit) ]]
                     </strong>
                   </div>
                   <div class="mobile-fund-metric">
-                    <span class="mobile-fund-metric__label">更新时间</span>
-                    <strong class="mobile-fund-metric__value mobile-fund-metric__value--time">[[ fund.nav_confirmed ? fund.jzrq : fund.gztime ]]</strong>
+                    <span class="mobile-fund-metric__label">仓位占比</span>
+                    <strong class="mobile-fund-metric__value">
+                      [[ formatPercentText(fund.position_ratio) ]]
+                    </strong>
                   </div>
                 </div>
                 <div v-if="editingFundCode !== fund.code" class="mobile-fund-card__footer">
-                  <div class="mobile-fund-group-inline">分组：[[ fundMetaMap[fund.code]?.group_name || '-' ]]</div>
+                  <div class="mobile-fund-group-inline">分组：[[ fund.group_name || '-' ]]</div>
                   <button type="button" class="mobile-fund-group-edit-btn" title="修改分组" @click.stop="startEditFundGroup(fund.code)">
                     <svg viewBox="0 0 16 16" aria-hidden="true">
                       <path d="M11.7 1.3a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4l-7.9 7.9-3.3.8.8-3.3 7.4-7.4zM10.3 2.7 3.9 9.1l-.4 1.6 1.6-.4 6.4-6.4-1.2-1.2z"/>
@@ -305,7 +332,7 @@
                   </button>
                 </div>
                 <div class="mt-2" v-if="editingFundCode === fund.code">
-                  <select class="table-group-select mobile" :value="String(fundMetaMap[fund.code]?.group_id || '')" @change="changeFundGroup(fund.code, $event.target.value)" @blur="stopEditFundGroup(fund.code)" @click.stop>
+                  <select class="table-group-select mobile" :value="String(fund.group_id || '')" @change="changeFundGroup(fund.code, $event.target.value)" @blur="stopEditFundGroup(fund.code)" @click.stop>
                     <option v-for="group in fundGroups" :key="group.id" :value="String(group.id)">[[ group.name ]]</option>
                   </select>
                 </div>
@@ -350,7 +377,7 @@
         </div>
 
         <div class="detail-panel__body" v-if="detailTab === 'overview'">
-          <template v-if="!hasLoadedAnyDetail && (loading || detailLoading || !currentFundCode)">
+          <template v-if="!hasLoadedAnyDetail && (loading || detailLoading) && userFunds.length > 0">
             <div class="detail-skeleton">
               <div class="skeleton detail-skeleton__hero"></div>
               <div class="detail-skeleton__metrics">
@@ -373,15 +400,15 @@
 
             <div class="detail-metrics">
               <article class="detail-metric-card">
-                <div class="detail-metric-card__label">当前净值</div>
-                <div class="detail-metric-card__value" :class="getColorClass(detailBasicView.nav_confirmed ? detailBasicView.confirmed_change : detailBasicView.gszzl)">
-                  [[ detailBasicView.nav_confirmed ? detailBasicView.confirmed_nav : (detailBasicView.gsz || '-') ]]
-                </div>
-              </article>
-              <article class="detail-metric-card">
                 <div class="detail-metric-card__label">当前涨跌</div>
                 <div class="detail-metric-card__value" :class="getColorClass(detailBasicView.nav_confirmed ? detailBasicView.confirmed_change : detailBasicView.gszzl)">
                   [[ formatChange(detailBasicView.nav_confirmed ? detailBasicView.confirmed_change : detailBasicView.gszzl, 2) ]]%
+                </div>
+              </article>
+              <article class="detail-metric-card">
+                <div class="detail-metric-card__label">当日收益</div>
+                <div class="detail-metric-card__value" :class="getColorClass(currentPortfolioItem?.daily_profit)">
+                  [[ formatCurrency(currentPortfolioItem?.daily_profit) ]]
                 </div>
               </article>
             </div>
@@ -393,7 +420,7 @@
             <div id="intradayChart" class="chart-surface"></div>
           </template>
 
-          <template v-else-if="!loading && !detailLoading && hasLoadedAnyDetail">
+          <template v-else-if="!loading && !detailLoading && !currentFundCode">
             <div class="portfolio-placeholder">
               <div class="focus-card">
                 <div class="focus-card__title">默认展示组合级信息</div>
@@ -403,7 +430,7 @@
                 </div>
               </div>
               <div class="detail-metrics">
-                <article class="detail-metric-card" v-for="item in monitorSummaryCards" :key="`placeholder-${item.key}`">
+                <article class="detail-metric-card" v-for="item in portfolioSummaryCards" :key="`placeholder-${item.key}`">
                   <div class="detail-metric-card__label">[[ item.label ]]</div>
                   <div class="detail-metric-card__value" :class="item.valueClass">[[ item.value ]]</div>
                 </article>
@@ -527,6 +554,104 @@
           <button type="button" class="btn btn-light" @click="closeDeleteGroupModal">取消</button>
           <button type="button" class="btn btn-danger group-modal-confirm" @click="confirmDeleteGroup" :disabled="deletingGroup">
             [[ deletingGroup ? '删除中...' : '确认删除' ]]
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="positionModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered group-action-modal">
+      <div class="modal-content">
+        <div class="modal-header border-0 pb-0">
+          <div>
+            <h5 class="modal-title">编辑持仓</h5>
+          </div>
+          <button type="button" class="btn-close" @click="closePositionModal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body pt-3">
+          <p class="group-modal-copy mb-3">[[ positionForm.name || positionForm.code ]]</p>
+          <label class="form-label small text-muted">持有金额</label>
+          <input
+            type="number"
+            class="form-control group-modal-input"
+            v-model="positionForm.holding_amount"
+            step="0.01"
+            min="0"
+            placeholder="例如 10000"
+          >
+          <label class="form-label small text-muted mt-3">持有收益</label>
+          <input
+            type="number"
+            class="form-control group-modal-input"
+            v-model="positionForm.holding_profit"
+            step="0.01"
+            placeholder="例如 89.26，可为负数"
+            @keyup.enter="savePosition"
+          >
+          <div class="text-danger small mt-2" v-if="positionActionError">[[ positionActionError ]]</div>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button type="button" class="btn btn-light" @click="closePositionModal">取消</button>
+          <button type="button" class="btn btn-primary group-modal-confirm" @click="savePosition" :disabled="savingPosition">
+            [[ savingPosition ? '保存中...' : '保存' ]]
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="deleteFundModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered group-action-modal">
+      <div class="modal-content">
+        <div class="modal-header border-0 pb-0">
+          <div>
+            <div class="group-modal-eyebrow danger">风险操作</div>
+            <h5 class="modal-title">删除基金</h5>
+          </div>
+          <button type="button" class="btn-close" @click="closeDeleteFundModal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body pt-3">
+          <p class="group-modal-copy mb-2">
+            确定删除基金 <span class="fw-semibold">[[ pendingDeleteFund.name || pendingDeleteFund.code ]]</span> 吗？
+          </p>
+          <div class="group-delete-note">
+            删除后只会移除当前关注和持仓快照，不会影响基金行情数据源。
+          </div>
+          <div class="text-danger small mt-3" v-if="fundActionError">[[ fundActionError ]]</div>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button type="button" class="btn btn-light" @click="closeDeleteFundModal">取消</button>
+          <button type="button" class="btn btn-danger group-modal-confirm" @click="removeFund" :disabled="deletingFund">
+            [[ deletingFund ? '删除中...' : '确认删除' ]]
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="clearAllModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered group-action-modal">
+      <div class="modal-content">
+        <div class="modal-header border-0 pb-0">
+          <div>
+            <div class="group-modal-eyebrow danger">风险操作</div>
+            <h5 class="modal-title">清空基金</h5>
+          </div>
+          <button type="button" class="btn-close" @click="closeClearAllModal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body pt-3">
+          <p class="group-modal-copy mb-2">
+            确定清空当前全部关注基金吗？
+          </p>
+          <div class="group-delete-note">
+            清空后会移除全部基金和持仓快照，请谨慎操作。
+          </div>
+        </div>
+        <div class="modal-footer border-0 pt-0">
+          <button type="button" class="btn btn-light" @click="closeClearAllModal">取消</button>
+          <button type="button" class="btn btn-danger group-modal-confirm" @click="clearAll" :disabled="clearingAllFunds">
+            [[ clearingAllFunds ? '清空中...' : '确认清空' ]]
           </button>
         </div>
       </div>

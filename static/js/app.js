@@ -3,6 +3,7 @@ import {
   createFundGroup,
   deleteFundGroup,
   deleteUserFund,
+  fetchPortfolio,
   fetchFundsRaw,
   fetchIndexesRaw,
   fetchUserFundsMeta,
@@ -10,8 +11,23 @@ import {
   moveUserFundGroup,
   renameFundGroup,
   saveUserFund,
+  updateUserFundPosition,
 } from './api.js';
-import { disposeCharts, renderHistoryChart, resizeDetailCharts } from './charts.js';
+import {
+  disposeCharts,
+  renderHistoryChart,
+  renderPortfolioProfitChart,
+  resizeDetailCharts
+} from './charts.js';
+import {
+  TRADING_MINUTES,
+  formatMinuteNow,
+  getTodayDate,
+  minuteToIndex,
+  normalizeToStepMinute,
+  readIntradayCache,
+  toMinute,
+} from './cache.js';
 import { createDetailController } from './detail-modal.js';
 import {
   EMPTY_DETAIL,
@@ -28,14 +44,25 @@ import { createRefreshTimers } from './timers.js';
 
 const THEME_STORAGE_KEY = 'fundMonitorTheme';
 const RELEASE_NOTICE_STORAGE_KEY = 'fundMonitorReleaseNoticeSeen';
-const RELEASE_NOTICE_VERSION = 'release-2026-04-20-ui-upgrade';
+const RELEASE_NOTICE_VERSION = 'release-2026-04-22-profit-upgrade';
 const RELEASE_NOTICE_ITEMS = [
-  { id: '1', text: '新增分组管理功能，支持基金分组、分组筛选和基金快速移动分组' },
-  { id: '2', text: '优化页面整体布局、详情联动区和移动端交互，支持浅色 / 深色主题切换' },
-  { id: '3', text: '修复分组切换、详情刷新、历史净值查询和 QDII 基金走势图显示等问题' },
-  { id: '4', text: '后续计划：继续补充持仓成本、持仓市值、今日收益、累计收益和交易记录等功能' }
+  { id: '1', text: '首页收益概览升级，支持查看总持仓市值、当日收益和持有收益。' },
+  { id: '2', text: '新增组合当日收益走势图，收益变化更直观。' },
+  { id: '3', text: '基金列表新增仓位占比展示，持仓信息更清晰。' },
+  { id: '4', text: '编辑持仓、分组管理和删除基金弹窗体验已优化，深色模式同步适配。' }
 ];
-const { createApp, ref, onMounted, onUnmounted, computed, nextTick } = window.Vue;
+
+const { createApp, ref, onMounted, onUnmounted, computed, nextTick, watch } = window.Vue;
+
+const LUNCH_START_INDEX = minuteToIndex('11:33');
+const LUNCH_END_INDEX = minuteToIndex('12:57');
+
+const isLunchBreakMinute = (minute) => {
+  const [h, m] = String(minute || '').split(':').map((v) => parseInt(v, 10));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
+  const total = h * 60 + m;
+  return total > 690 && total < 780;
+};
 
 const app = createApp({
   setup() {
@@ -48,6 +75,17 @@ const app = createApp({
     const fundGroups = ref([]);
     const activeGroupId = ref('all');
     const funds = ref([]);
+    const portfolioItems = ref([]);
+    const portfolioSummary = ref({
+      total_holding_amount: 0,
+      total_daily_profit: 0,
+      total_holding_profit: 0,
+      total_holding_profit_rate: 0,
+      position_fund_count: 0,
+      unpositioned_fund_count: 0,
+      nav_source: null,
+      updated_at: ''
+    });
     const indexes = ref([]);
     const loading = ref(false);
     const lastUpdateTime = ref('-');
@@ -71,12 +109,33 @@ const app = createApp({
     const historyRangeDays = ref(30);
     const historyLoading = ref(false);
     const historyData = ref({ success: false, data: [] });
+    const historyFundCode = ref('');
     const mobileDetailOpen = ref(false);
     const releaseNoticeOpen = ref(false);
+    const positionForm = ref({
+      code: '',
+      name: '',
+      holding_amount: '',
+      holding_profit: ''
+    });
+    const deletingFund = ref(false);
+    const fundActionError = ref('');
+    const pendingDeleteFund = ref({
+      code: '',
+      name: ''
+    });
+    const clearingAllFunds = ref(false);
+    const savingPosition = ref(false);
+    const positionActionError = ref('');
+
     let clockTimer = null;
     let renameGroupModal = null;
     let deleteGroupModal = null;
+    let positionModal = null;
+    let deleteFundModal = null;
+    let clearAllModal = null;
     let resizeHandler = null;
+    let latestHistoryRequestId = 0;
 
     const parseNumber = (val) => {
       const n = parseFloat(val);
@@ -87,6 +146,30 @@ const app = createApp({
       const n = parseNumber(val);
       if (!Number.isFinite(n)) return '-';
       return `${formatChange(n, 2)}%`;
+    };
+
+    const formatCurrency = (val) => {
+      const n = parseNumber(val);
+      if (!Number.isFinite(n)) return '-';
+      return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    const formatPercentText = (val) => {
+      const n = parseNumber(val);
+      if (!Number.isFinite(n)) return '-';
+      return `${formatChange(n * 100, 2)}%`;
+    };
+
+    const renderPortfolioProfitVisuals = async () => {
+      await nextTick();
+      renderPortfolioProfitChart(portfolioIntradayChartData.value);
+      resizeDetailCharts();
+    };
+
+    const renderActiveHistoryChart = async () => {
+      await nextTick();
+      renderHistoryChart(historyData.value);
+      resizeDetailCharts();
     };
 
     const isMobileViewport = () => window.matchMedia('(max-width: 860px)').matches;
@@ -111,9 +194,7 @@ const app = createApp({
       document.body.dataset.theme = theme.value;
       try {
         localStorage.setItem(THEME_STORAGE_KEY, theme.value);
-      } catch {
-        // ignore localStorage failures
-      }
+      } catch {}
     };
 
     const initTheme = () => {
@@ -144,9 +225,7 @@ const app = createApp({
     const confirmReleaseNotice = () => {
       try {
         localStorage.setItem(RELEASE_NOTICE_STORAGE_KEY, RELEASE_NOTICE_VERSION);
-      } catch {
-        // ignore localStorage failures
-      }
+      } catch {}
       releaseNoticeOpen.value = false;
     };
 
@@ -168,23 +247,22 @@ const app = createApp({
     ));
 
     const filteredFunds = computed(() => {
-      if (!Array.isArray(funds.value)) return [];
-      if (activeGroupId.value === 'all') return funds.value.slice();
-      return funds.value.filter((fund) => String(fundMetaMap.value[fund.code]?.group_id || '') === String(activeGroupId.value));
+      if (!Array.isArray(portfolioItems.value)) return [];
+      if (activeGroupId.value === 'all') return portfolioItems.value.slice();
+      return portfolioItems.value.filter((fund) => String(fund.group_id || '') === String(activeGroupId.value));
     });
 
     const sortedFunds = computed(() => {
       if (filteredFunds.value.length === 0) return [];
       if (sortDir.value === 'none') return filteredFunds.value.slice();
       return filteredFunds.value.slice().sort((a, b) => {
-        const av = parseNumber(a.nav_confirmed ? a.confirmed_change : a.gszzl || '0');
-        const bv = parseNumber(b.nav_confirmed ? b.confirmed_change : b.gszzl || '0');
+        const av = parseNumber(a.daily_change_pct || '0');
+        const bv = parseNumber(b.daily_change_pct || '0');
         return sortDir.value === 'asc' ? av - bv : bv - av;
       });
     });
 
     const fundListRenderKey = computed(() => `${activeGroupId.value}-${sortedFunds.value.map((item) => item.code).join(',')}`);
-
     const sortIcon = computed(() => getSortIcon(sortDir.value));
 
     const marketNowText = computed(() => {
@@ -217,7 +295,7 @@ const app = createApp({
         },
         {
           key: 'confirmed',
-          label: '已确认净值',
+          label: '已更新净值',
           value: String(confirmedCount),
           meta: totalFunds > 0 ? `占比 ${Math.round((confirmedCount / totalFunds) * 100)}%` : '等待数据',
           valueClass: ''
@@ -237,6 +315,149 @@ const app = createApp({
           valueClass: ''
         }
       ];
+    });
+
+    const portfolioSummaryCards = computed(() => ([
+      {
+        key: 'holding_amount',
+        label: activeGroupId.value === 'all' ? '总持仓市值' : '分组持仓市值',
+        value: formatCurrency(portfolioSummary.value.total_holding_amount),
+        meta: '',
+        valueClass: '',
+        metaClass: ''
+      },
+      {
+        key: 'daily_profit',
+        label: '今日收益',
+        value: formatCurrency(portfolioSummary.value.total_daily_profit),
+        meta: (
+          Number.isFinite(parseNumber(portfolioSummary.value.total_daily_profit))
+          && Number.isFinite(parseNumber(portfolioSummary.value.total_holding_amount))
+          && parseNumber(portfolioSummary.value.total_holding_amount) > 0
+        )
+          ? `今日 ${formatPercentText(parseNumber(portfolioSummary.value.total_daily_profit) / parseNumber(portfolioSummary.value.total_holding_amount))}`
+          : '',
+        valueClass: getColorClass(portfolioSummary.value.total_daily_profit),
+        metaClass: (
+          Number.isFinite(parseNumber(portfolioSummary.value.total_daily_profit))
+          && Number.isFinite(parseNumber(portfolioSummary.value.total_holding_amount))
+          && parseNumber(portfolioSummary.value.total_holding_amount) > 0
+        )
+          ? getColorClass(parseNumber(portfolioSummary.value.total_daily_profit) / parseNumber(portfolioSummary.value.total_holding_amount))
+          : ''
+      },
+      {
+        key: 'holding_profit',
+        label: '持有收益',
+        value: formatCurrency(portfolioSummary.value.total_holding_profit),
+        meta: portfolioSummary.value.total_holding_amount > 0 && portfolioSummary.value.total_holding_profit_rate != null
+          ? `累计 ${formatPercentText(portfolioSummary.value.total_holding_profit_rate)}`
+          : '',
+        valueClass: getColorClass(portfolioSummary.value.total_holding_profit),
+        metaClass: portfolioSummary.value.total_holding_amount > 0 && portfolioSummary.value.total_holding_profit_rate != null
+          ? getColorClass(portfolioSummary.value.total_holding_profit_rate)
+          : ''
+      }
+    ]));
+
+    const portfolioIntradayChartData = computed(() => {
+      const labels = TRADING_MINUTES.slice();
+      const positionItems = filteredFunds.value.filter((item) => item?.has_position);
+      if (positionItems.length === 0) {
+        return {
+          labels,
+          values: [],
+          currentIdx: Math.max(minuteToIndex(formatMinuteNow()), 0),
+          hasData: false
+        };
+      }
+
+      const cache = readIntradayCache();
+      const todayCache = cache[getTodayDate()] || {};
+      const nowMinute = formatMinuteNow();
+      let currentIdx = Math.max(minuteToIndex(nowMinute), 0);
+      if (isLunchBreakMinute(nowMinute)) {
+        currentIdx = Math.max(currentIdx, LUNCH_END_INDEX);
+      }
+
+      const totals = labels.map(() => null);
+
+      positionItems.forEach((item) => {
+        const shares = parseNumber(item.holding_shares);
+        const previousNav = parseNumber(item.previous_nav);
+        if (!Number.isFinite(shares) || shares <= 0 || !Number.isFinite(previousNav) || previousNav <= 0) {
+          return;
+        }
+
+        const pointMap = {};
+        const cachedPoints = todayCache[item.code] || {};
+        Object.keys(cachedPoints).forEach((minute) => {
+          const normalized = normalizeToStepMinute(minute);
+          const nav = parseNumber(cachedPoints[minute]);
+          if (!normalized || !Number.isFinite(nav) || !labels.includes(normalized)) return;
+          pointMap[normalized] = nav;
+        });
+
+        if (String(item.current_nav_source || '') === 'estimated') {
+          const liveMinute = normalizeToStepMinute(toMinute(item.gztime) || nowMinute);
+          const liveNav = parseNumber(item.current_nav);
+          if (liveMinute && Number.isFinite(liveNav) && labels.includes(liveMinute)) {
+            pointMap[liveMinute] = liveNav;
+          }
+        }
+
+        const series = new Array(labels.length).fill(null);
+        labels.forEach((label, idx) => {
+          const nav = parseNumber(pointMap[label]);
+          if (Number.isFinite(nav)) series[idx] = nav;
+        });
+
+        const knownIndexes = series.reduce((acc, value, idx) => {
+          if (Number.isFinite(value)) acc.push(idx);
+          return acc;
+        }, []);
+        if (knownIndexes.length === 0) return;
+
+        let lastKnown = null;
+        for (let i = 0; i <= currentIdx; i += 1) {
+          if (Number.isFinite(series[i])) {
+            lastKnown = series[i];
+            continue;
+          }
+          if (lastKnown !== null) series[i] = lastKnown;
+        }
+
+        const lunchAnchor = series[LUNCH_START_INDEX - 1] ?? series[LUNCH_START_INDEX] ?? null;
+        if (Number.isFinite(lunchAnchor) && currentIdx >= LUNCH_START_INDEX) {
+          for (let i = LUNCH_START_INDEX; i <= Math.min(LUNCH_END_INDEX, currentIdx); i += 1) {
+            series[i] = lunchAnchor;
+          }
+        }
+
+        if (knownIndexes.length === 1) {
+          const singleValue = series[knownIndexes[0]];
+          for (let i = 0; i <= currentIdx; i += 1) {
+            if (!Number.isFinite(series[i])) series[i] = singleValue;
+          }
+        }
+
+        for (let i = currentIdx + 1; i < series.length; i += 1) {
+          series[i] = null;
+        }
+
+        for (let i = 0; i < series.length; i += 1) {
+          if (!Number.isFinite(series[i])) continue;
+          const profit = Number((shares * (series[i] - previousNav)).toFixed(2));
+          totals[i] = Number(((totals[i] ?? 0) + profit).toFixed(2));
+        }
+      });
+
+      return {
+        labels,
+        values: totals,
+        currentIdx,
+        hasData: totals.some((value) => Number.isFinite(value))
+      };
     });
 
     const selectedFundGroupName = computed(() => (
@@ -271,6 +492,10 @@ const app = createApp({
       (funds.value || []).find((item) => item.code === currentFundCode.value) || null
     ));
 
+    const currentPortfolioItem = computed(() => (
+      (portfolioItems.value || []).find((item) => item.code === currentFundCode.value) || null
+    ));
+
     const activeRowFundCode = computed(() => pendingFundCode.value || currentFundCode.value);
 
     const detailBasicView = computed(() => {
@@ -282,11 +507,7 @@ const app = createApp({
       return {
         name: basic.name || quote.name || currentFundName.value || '',
         code: currentFundCode.value || basic.code || quote.code || '',
-        nav_confirmed: Boolean(
-          displayDate !== '-'
-            && confirmedDate !== '-'
-            && displayDate === confirmedDate
-        ),
+        nav_confirmed: Boolean(displayDate !== '-' && confirmedDate !== '-' && displayDate === confirmedDate),
         confirmed_nav: quote.confirmed_nav || basic.confirmed_nav || '-',
         confirmed_change: quote.confirmed_change || basic.confirmed_change || '-',
         gsz: quote.gsz || basic.gsz || '-',
@@ -341,12 +562,32 @@ const app = createApp({
       group_name: fundMetaMap.value[item.code]?.group_name || ''
     }));
 
+    const normalizePortfolioItems = (items) => (
+      Array.isArray(items) ? items.map((item) => ({
+        ...item,
+        nav_confirmed: item.current_nav_source === 'confirmed',
+        confirmed_nav: item.current_nav_source === 'confirmed' ? item.current_nav : '',
+        confirmed_change: item.current_nav_source === 'confirmed' ? item.daily_change_pct : '',
+        gsz: item.current_nav_source === 'estimated' ? item.current_nav : '',
+        gszzl: item.current_nav_source === 'estimated' ? item.daily_change_pct : '',
+        gztime: item.current_nav_source === 'estimated' ? item.current_nav_date : '',
+        jzrq: item.current_nav_source === 'confirmed' ? item.current_nav_date : '',
+        dwjz: item.previous_nav ?? '',
+      })) : []
+    );
+
     const fetchFunds = async () => {
       loading.value = true;
       try {
-        const quoteList = await fetchFundsRaw(savedCodes.value);
+        const [quoteList, portfolio] = await Promise.all([
+          fetchFundsRaw(savedCodes.value),
+          fetchPortfolio(clientId)
+        ]);
         funds.value = attachGroupMeta(quoteList);
+        portfolioItems.value = normalizePortfolioItems(portfolio?.items);
+        portfolioSummary.value = portfolio?.summary || portfolioSummary.value;
         lastUpdateTime.value = new Date().toLocaleTimeString();
+        await renderPortfolioProfitVisuals();
       } finally {
         loading.value = false;
       }
@@ -360,12 +601,15 @@ const app = createApp({
       loading.value = true;
       try {
         await loadUserState();
-        const [quoteList, idxRes] = await Promise.all([
+        const [quoteList, idxRes, portfolio] = await Promise.all([
           fetchFundsRaw(savedCodes.value),
-          fetchIndexesRaw()
+          fetchIndexesRaw(),
+          fetchPortfolio(clientId)
         ]);
         funds.value = attachGroupMeta(quoteList);
         indexes.value = idxRes;
+        portfolioItems.value = normalizePortfolioItems(portfolio?.items);
+        portfolioSummary.value = portfolio?.summary || portfolioSummary.value;
         lastUpdateTime.value = new Date().toLocaleTimeString();
 
         if (currentFundCode.value) {
@@ -379,6 +623,8 @@ const app = createApp({
             detailError.value = '';
             detailTab.value = 'overview';
             pendingFundCode.value = '';
+            historyData.value = { success: false, data: [] };
+            historyFundCode.value = '';
           }
         }
 
@@ -388,11 +634,14 @@ const app = createApp({
 
         if (currentFundCode.value && historyRangeDays.value === 30) {
           historyData.value = detailFund.value?.history || { success: false, data: [] };
+          historyFundCode.value = currentFundCode.value;
         }
 
         if (currentFundCode.value && detailTab.value === 'overview' && hasLoadedAnyDetail.value) {
           await renderDetailVisuals();
         }
+
+        await renderPortfolioProfitVisuals();
       } finally {
         loading.value = false;
       }
@@ -416,60 +665,61 @@ const app = createApp({
     });
 
     const setDetailTab = async (tab) => {
+      if (detailTab.value === tab) {
+        if (tab === 'overview') await renderDetailVisuals();
+        if (tab === 'history') await ensureHistoryRange(historyRangeDays.value);
+        return;
+      }
+
       detailTab.value = tab;
-      if (tab === 'overview') {
-        await renderDetailVisuals();
-      }
-      if (tab === 'history') {
-        await ensureHistoryRange(historyRangeDays.value);
-        await nextTick();
-        renderHistoryChart(historyData.value);
-        resizeDetailCharts();
-      }
+      if (tab === 'overview') await renderDetailVisuals();
+      if (tab === 'history') await ensureHistoryRange(historyRangeDays.value);
     };
 
     const showDetail = async (code) => {
       openMobileDetail();
-      const targetHistoryRange = detailTab.value === 'history' ? historyRangeDays.value : 30;
-      if (!currentFundCode.value) detailTab.value = 'overview';
+      const switchingFund = currentFundCode.value && currentFundCode.value !== code;
+      if (!currentFundCode.value || switchingFund) {
+        detailTab.value = 'overview';
+      }
       await showDetailInternal(code);
-      historyRangeDays.value = targetHistoryRange;
-      historyData.value = targetHistoryRange === 30
-        ? (detailFund.value?.history || { success: false, data: [] })
-        : { success: false, data: [] };
-      if (detailTab.value === 'overview') {
-        await renderDetailVisuals();
-      }
-      if (detailTab.value === 'history') {
-        await ensureHistoryRange(targetHistoryRange);
-        await nextTick();
-        renderHistoryChart(historyData.value);
-        resizeDetailCharts();
-      }
+      if (currentFundCode.value !== code) return;
+      historyRangeDays.value = 30;
+      historyFundCode.value = code;
+      historyData.value = detailFund.value?.history || { success: false, data: [] };
+      if (detailTab.value === 'overview') await renderDetailVisuals();
+      if (detailTab.value === 'history') await ensureHistoryRange(30);
     };
 
     const ensureHistoryRange = async (days) => {
-      if (!currentFundCode.value) return;
-      if (historyRangeDays.value === days && historyData.value?.data?.length && days !== 30) return;
+      const code = currentFundCode.value;
+      if (!code) return;
+      if (historyRangeDays.value === days && historyFundCode.value === code && historyData.value?.data?.length) {
+        if (detailTab.value === 'history') await renderActiveHistoryChart();
+        return;
+      }
 
       historyRangeDays.value = days;
       if (days === 30 && detailFund.value?.history?.data?.length) {
         historyData.value = detailFund.value.history;
-        await nextTick();
-        renderHistoryChart(historyData.value);
-        resizeDetailCharts();
+        historyFundCode.value = code;
+        if (detailTab.value === 'history') await renderActiveHistoryChart();
         return;
       }
 
+      const requestId = latestHistoryRequestId + 1;
+      latestHistoryRequestId = requestId;
       historyLoading.value = true;
       try {
-        const data = await loadFundHistory(currentFundCode.value, days);
+        const data = await loadFundHistory(code, days);
+        if (requestId !== latestHistoryRequestId || currentFundCode.value !== code) return;
         historyData.value = data && Array.isArray(data.data) ? data : { success: false, data: [] };
-        await nextTick();
-        renderHistoryChart(historyData.value);
-        resizeDetailCharts();
+        historyFundCode.value = code;
+        if (detailTab.value === 'history') await renderActiveHistoryChart();
       } finally {
-        historyLoading.value = false;
+        if (requestId === latestHistoryRequestId) {
+          historyLoading.value = false;
+        }
       }
     };
 
@@ -525,6 +775,18 @@ const app = createApp({
       if (!deleteGroupModal) {
         const el = document.getElementById('deleteGroupModal');
         if (el) deleteGroupModal = window.bootstrap.Modal.getOrCreateInstance(el);
+      }
+      if (!positionModal) {
+        const el = document.getElementById('positionModal');
+        if (el) positionModal = window.bootstrap.Modal.getOrCreateInstance(el);
+      }
+      if (!deleteFundModal) {
+        const el = document.getElementById('deleteFundModal');
+        if (el) deleteFundModal = window.bootstrap.Modal.getOrCreateInstance(el);
+      }
+      if (!clearAllModal) {
+        const el = document.getElementById('clearAllModal');
+        if (el) clearAllModal = window.bootstrap.Modal.getOrCreateInstance(el);
       }
     };
 
@@ -616,31 +878,116 @@ const app = createApp({
       await nextTick();
     };
 
-    const removeFund = async (code) => {
-      if (!confirm(`确定不再关注基金 ${code} 吗？`)) return;
-      await deleteUserFund(clientId, code);
+    const openPositionModal = (fund) => {
+      if (!fund) return;
+      ensureGroupModals();
+      positionActionError.value = '';
+      positionForm.value = {
+        code: fund.code,
+        name: fund.name || '',
+        holding_amount: fund.snapshot_holding_amount != null ? String(fund.snapshot_holding_amount) : '',
+        holding_profit: fund.snapshot_holding_profit != null ? String(fund.snapshot_holding_profit) : ''
+      };
+      positionModal?.show();
+    };
+
+    const closePositionModal = () => {
+      positionActionError.value = '';
+      positionModal?.hide();
+    };
+
+    const savePosition = async () => {
+      if (!positionForm.value.code) return;
+      savingPosition.value = true;
+      positionActionError.value = '';
+      try {
+        const result = await updateUserFundPosition(clientId, positionForm.value.code, {
+          holding_amount: positionForm.value.holding_amount,
+          holding_profit: positionForm.value.holding_profit
+        });
+        if (result.error || result.success === false) {
+          positionActionError.value = result.error || '保存持仓失败';
+          return;
+        }
+        closePositionModal();
+        await fetchData();
+      } finally {
+        savingPosition.value = false;
+      }
+    };
+
+    const openDeleteFundModal = (fund) => {
+      if (!fund?.code) return;
+      ensureGroupModals();
+      fundActionError.value = '';
+      pendingDeleteFund.value = {
+        code: fund.code,
+        name: fund.name || ''
+      };
+      deleteFundModal?.show();
+    };
+
+    const closeDeleteFundModal = () => {
+      fundActionError.value = '';
+      deleteFundModal?.hide();
+    };
+
+    const openClearAllModal = () => {
+      ensureGroupModals();
+      clearAllModal?.show();
+    };
+
+    const closeClearAllModal = () => {
+      clearAllModal?.hide();
+    };
+
+    const removeFund = async () => {
+      const code = pendingDeleteFund.value.code;
+      if (!code) return;
+      deletingFund.value = true;
+      fundActionError.value = '';
+      try {
+        await deleteUserFund(clientId, code);
+      } catch {
+        fundActionError.value = '删除基金失败';
+        return;
+      } finally {
+        deletingFund.value = false;
+      }
+      closeDeleteFundModal();
       if (currentFundCode.value === code) {
         currentFundCode.value = '';
         currentFundName.value = '';
         detailFund.value = EMPTY_DETAIL();
         detailError.value = '';
         detailTab.value = 'overview';
+        historyData.value = { success: false, data: [] };
+        historyFundCode.value = '';
         closeMobileDetail();
       }
       await fetchData();
     };
 
     const clearAll = async () => {
-      if (!confirm('确定清空所有关注基金吗？')) return;
-      await Promise.all(savedCodes.value.map((code) => deleteUserFund(clientId, code)));
-      await fetchData();
-      funds.value = [];
-      currentFundCode.value = '';
-      currentFundName.value = '';
-      detailFund.value = EMPTY_DETAIL();
-      detailError.value = '';
-      detailTab.value = 'overview';
-      closeMobileDetail();
+      if (savedCodes.value.length === 0) return;
+      clearingAllFunds.value = true;
+      try {
+        await Promise.all(savedCodes.value.map((code) => deleteUserFund(clientId, code)));
+        closeClearAllModal();
+        await fetchData();
+        funds.value = [];
+        portfolioItems.value = [];
+        currentFundCode.value = '';
+        currentFundName.value = '';
+        detailFund.value = EMPTY_DETAIL();
+        detailError.value = '';
+        detailTab.value = 'overview';
+        historyData.value = { success: false, data: [] };
+        historyFundCode.value = '';
+        closeMobileDetail();
+      } finally {
+        clearingAllFunds.value = false;
+      }
     };
 
     const timers = createRefreshTimers({ fetchFunds, fetchIndexes });
@@ -674,6 +1021,13 @@ const app = createApp({
       };
       window.addEventListener('resize', resizeHandler);
     });
+
+    watch(
+      () => [portfolioIntradayChartData.value, activeGroupId.value, theme.value],
+      () => {
+        renderPortfolioProfitVisuals();
+      }
+    );
 
     onUnmounted(() => {
       timers.stop();
@@ -729,15 +1083,27 @@ const app = createApp({
       historyLoading,
       historyData,
       mobileDetailOpen,
+      portfolioItems,
+      portfolioSummary,
+      positionForm,
+      deletingFund,
+      fundActionError,
+      pendingDeleteFund,
+      clearingAllFunds,
+      savingPosition,
+      positionActionError,
       releaseNoticeOpen,
       releaseNoticeVersion: RELEASE_NOTICE_VERSION,
       releaseNoticeItems: RELEASE_NOTICE_ITEMS,
       monitorSummaryCards,
+      portfolioSummaryCards,
+      portfolioIntradayChartData,
       selectedFundGroupName,
       intradayDataTag,
       topTenHoldings,
       historyPreview,
       selectedFundQuote,
+      currentPortfolioItem,
       detailBasicView,
       toggleTheme,
       confirmReleaseNotice,
@@ -758,10 +1124,19 @@ const app = createApp({
       startEditFundGroup,
       stopEditFundGroup,
       switchGroup,
+      openPositionModal,
+      closePositionModal,
+      savePosition,
+      openDeleteFundModal,
+      closeDeleteFundModal,
+      openClearAllModal,
+      closeClearAllModal,
       removeFund,
       clearAll,
       fetchData,
       formatHoldingChange,
+      formatCurrency,
+      formatPercentText,
       formatChange,
       getColorClass,
       getIndexCardClass,

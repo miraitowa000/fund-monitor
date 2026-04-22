@@ -11,6 +11,7 @@ from services.fund_service import (
     start_background_refresh_thread,
 )
 from services.index_service import get_indexes
+from services.user_fund_profit_service import get_user_portfolio
 from services.user_fund_service import (
     add_or_update_user_fund,
     bootstrap_user_funds,
@@ -22,6 +23,7 @@ from services.user_fund_service import (
     list_groups_with_counts,
     move_user_fund,
     rename_group,
+    update_user_fund_position_snapshot,
 )
 
 
@@ -189,6 +191,32 @@ def update_user_fund_group(fund_code):
         return _add_cors_headers(jsonify(result))
     except ValueError as exc:
         return _add_cors_headers(jsonify({'error': str(exc)})), 400
+
+
+@app.route('/api/user/funds/<fund_code>/position', methods=['PUT'])
+def update_user_fund_position(fund_code):
+    client_id, error = _require_client_id()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    try:
+        result = update_user_fund_position_snapshot(
+            client_id,
+            fund_code,
+            data.get('holding_amount'),
+            data.get('holding_profit'),
+        )
+        return _add_cors_headers(jsonify(result))
+    except ValueError as exc:
+        return _add_cors_headers(jsonify({'success': False, 'error': str(exc)})), 400
+
+
+@app.route('/api/user/portfolio', methods=['GET'])
+def get_user_portfolio_view():
+    client_id, error = _require_client_id()
+    if error:
+        return error
+    return _add_cors_headers(jsonify(get_user_portfolio(client_id)))
 
 
 @app.route('/api/user/funds/<fund_code>', methods=['DELETE'])

@@ -275,6 +275,23 @@ def _date_text(date_text):
     return raw.split(' ')[0]
 
 
+def _should_use_stale_basic(stale):
+    if not stale:
+        return False
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return True
+
+    current_minutes = now.hour * 60 + now.minute
+    if current_minutes < 540:
+        return True
+
+    stale_date = _date_text((stale or {}).get('display_date') or (stale or {}).get('gztime'))
+    if stale_date == '-' or stale_date == now.strftime('%Y-%m-%d'):
+        return True
+    return False
+
+
 def _sync_confirmation_fields(result):
     display_date = _date_text(result.get('display_date') or result.get('gztime'))
     confirmed_date = _date_text(result.get('confirmed_date') or result.get('jzrq'))
@@ -429,7 +446,7 @@ def fetch_funds_parallel(codes, request_timeout=15):
             results_map[code] = fresh
         else:
             stale = cache_get_stale('basic', code)
-            if stale:
+            if stale and _should_use_stale_basic(stale):
                 results_map[code] = stale
                 submit_basic_refresh(code, BG_REFRESH_EXECUTOR)
             else:
@@ -448,7 +465,7 @@ def fetch_funds_parallel(codes, request_timeout=15):
         for future in not_done:
             code = future_to_code[future]
             stale = cache_get_stale('basic', code)
-            results_map[code] = stale if stale else build_timeout_placeholder(code)
+            results_map[code] = stale if _should_use_stale_basic(stale) else build_timeout_placeholder(code)
     return [results_map.get(code) for code in norm_codes]
 
 
