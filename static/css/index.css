@@ -1236,7 +1236,7 @@ body[data-theme='dark'] #app .group-tab-count {
 
 .mobile-fund-card__metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1274,6 +1274,39 @@ body[data-theme='dark'] #app .group-tab-count {
 
 .mobile-fund-metric__value--time {
   font-size: 14px;
+}
+
+.mobile-fund-metric--daily {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-fund-metric__pair {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 16px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.mobile-fund-metric__value--change {
+  margin-top: 0;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.position-ratio-cell--mobile {
+  min-width: 0;
+  width: 100%;
+  gap: 6px;
+}
+
+.position-ratio-cell--mobile .position-ratio-cell__value {
+  font-size: 15px;
 }
 
 .mobile-fund-card__footer {
@@ -2810,10 +2843,28 @@ body[data-theme='dark'] #app .group-action-modal .btn-close {
     padding: 10px 12px;
   }
 
+  .mobile-fund-metric--daily {
+    align-items: flex-start;
+  }
+
+  .mobile-fund-metric__pair {
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .mobile-fund-metric__value {
     margin-top: 0;
-    font-size: 17px;
+    font-size: 13px;
     text-align: right;
+  }
+
+  .mobile-fund-metric__value--change {
+    font-size: 18px;
+  }
+
+  .position-ratio-cell--mobile .position-ratio-cell__value {
+    font-size: 13px;
   }
 
   .mobile-fund-metric__value--time {

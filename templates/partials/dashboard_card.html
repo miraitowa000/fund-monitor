@@ -303,12 +303,19 @@
               </div>
               <div class="mobile-fund-card__body">
                 <div class="mobile-fund-card__metrics">
-                  <div class="mobile-fund-metric">
+                  <div class="mobile-fund-metric mobile-fund-metric--daily">
                     <span class="mobile-fund-metric__label">当日收益</span>
-                    <strong class="mobile-fund-metric__value" :class="getColorClass(fund.daily_profit)">
-                      [[ formatCurrency(fund.daily_profit) ]]
-                    </strong>
-                    <div class="cell-muted">[[ formatPercentText(fund.daily_profit_rate) ]]</div>
+                    <div class="mobile-fund-metric__pair">
+                      <strong
+                        class="mobile-fund-metric__value mobile-fund-metric__value--change"
+                        :class="getColorClass(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl)"
+                      >
+                        [[ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) ]]%
+                      </strong>
+                      <strong class="mobile-fund-metric__value" :class="getColorClass(fund.daily_profit)">
+                        [[ formatCurrency(fund.daily_profit) ]]
+                      </strong>
+                    </div>
                   </div>
                   <div class="mobile-fund-metric">
                     <span class="mobile-fund-metric__label">持有收益</span>
@@ -318,9 +325,13 @@
                   </div>
                   <div class="mobile-fund-metric">
                     <span class="mobile-fund-metric__label">仓位占比</span>
-                    <strong class="mobile-fund-metric__value">
-                      [[ formatPercentText(fund.position_ratio) ]]
-                    </strong>
+                    <div class="position-ratio-cell position-ratio-cell--mobile" v-if="fund.position_ratio != null">
+                      <div class="position-ratio-cell__value">[[ formatPercentText(fund.position_ratio) ]]</div>
+                      <div class="position-ratio-bar">
+                        <span class="position-ratio-bar__fill" :style="{ width: `${Math.max(0, Math.min(100, Number((fund.position_ratio * 100).toFixed(2))))}%` }"></span>
+                      </div>
+                    </div>
+                    <strong class="mobile-fund-metric__value" v-else>-</strong>
                   </div>
                 </div>
                 <div v-if="editingFundCode !== fund.code" class="mobile-fund-card__footer">
