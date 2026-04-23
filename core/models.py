@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db import Base
@@ -61,6 +61,14 @@ class UserFund(Base):
     group_id: Mapped[Optional[int]] = mapped_column(ForeignKey('fund_groups.id', ondelete='SET NULL'), nullable=True, index=True)
     fund_code: Mapped[str] = mapped_column(String(6), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    holding_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    holding_profit: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cost_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    holding_shares: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_cost_nav: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    snapshot_nav: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    snapshot_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    position_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

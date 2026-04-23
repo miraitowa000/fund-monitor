@@ -9,10 +9,33 @@ import {
 
 let intradayChartInstance = null;
 let historyChartInstance = null;
+let portfolioProfitChartInstance = null;
+
+const isMobileViewport = () => window.matchMedia('(max-width: 860px)').matches;
 
 const disposeChart = (chart) => {
   if (chart) chart.dispose();
   return null;
+};
+
+const ensureChartInstance = (chart, chartEl) => {
+  if (!chartEl) return null;
+  if (!chart) return echarts.init(chartEl);
+  if (typeof chart.isDisposed === 'function' && chart.isDisposed()) {
+    return echarts.init(chartEl);
+  }
+  if (typeof chart.getDom === 'function' && chart.getDom() !== chartEl) {
+    chart.dispose();
+    return echarts.init(chartEl);
+  }
+  return chart;
+};
+
+const clearChartHost = (chart, chartEl) => {
+  if (!chartEl) return;
+  if (!chart || (typeof chart.getDom === 'function' && chart.getDom() !== chartEl)) {
+    chartEl.innerHTML = '';
+  }
 };
 
 const LUNCH_START_INDEX = minuteToIndex('11:33');
@@ -79,8 +102,6 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
     else if (lastKnown !== null) values[i] = lastKnown;
   }
 
-  // During the lunch break, keep the 11:30 estimate flat until 13:00
-  // instead of dropping the chart to an implicit zero/null region.
   const lunchAnchor = values[LUNCH_START_INDEX - 1] ?? values[LUNCH_START_INDEX] ?? lastKnown;
   if (Number.isFinite(lunchAnchor)) {
     for (let i = LUNCH_START_INDEX; i <= LUNCH_END_INDEX; i += 1) {
@@ -104,13 +125,13 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
   if (!chartEl) return;
 
   const series = buildIntradaySeries(fundCode, intradayData);
-  intradayChartInstance = disposeChart(intradayChartInstance);
   if (!series) {
+    intradayChartInstance = disposeChart(intradayChartInstance);
     chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无当日走势数据，稍后刷新后再查看。</div>';
     return;
   }
 
-  chartEl.innerHTML = '';
+  clearChartHost(intradayChartInstance, chartEl);
   const base = basic ? parseFloat(basic.dwjz) : NaN;
   const fallbackChange = basic ? parseFloat(basic.confirmed_change || basic.gszzl) : NaN;
   let pctValues = series.values.map((value) => {
@@ -118,12 +139,8 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
     return Number((((value - base) / base) * 100).toFixed(4));
   });
 
-  // For overseas/QDII funds that do not provide intra-day snapshots,
-  // keep a flat line based on the current list/detail change percentage.
-  if (!pctValues.some((value) => Number.isFinite(value))) {
-    if (Number.isFinite(fallbackChange)) {
-      pctValues = series.values.map((value) => (value === null ? null : Number(fallbackChange.toFixed(4))));
-    }
+  if (!pctValues.some((value) => Number.isFinite(value)) && Number.isFinite(fallbackChange)) {
+    pctValues = series.values.map((value) => (value === null ? null : Number(fallbackChange.toFixed(4))));
   }
 
   const finitePctValues = pctValues.filter((value) => Number.isFinite(value));
@@ -138,7 +155,7 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
     return;
   }
 
-  intradayChartInstance = echarts.init(chartEl);
+  intradayChartInstance = ensureChartInstance(intradayChartInstance, chartEl);
   intradayChartInstance.setOption({
     tooltip: {
       trigger: 'axis',
@@ -178,7 +195,7 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
       connectNulls: false,
       lineStyle: { width: 2, color: '#e5484d' }
     }]
-  });
+  }, true);
 };
 
 export const renderHistoryChart = (historyData) => {
@@ -188,15 +205,12 @@ export const renderHistoryChart = (historyData) => {
   const rows = historyData && Array.isArray(historyData.data) ? historyData.data : [];
   if (rows.length === 0) {
     historyChartInstance = disposeChart(historyChartInstance);
-    chartEl.innerHTML = '<div class="text-muted text-center py-4">暂无近 30 天历史净值数据。</div>';
+    chartEl.innerHTML = '<div class="text-muted text-center py-4">暂无历史净值数据。</div>';
     return;
   }
 
-  if (!historyChartInstance) {
-    chartEl.innerHTML = '';
-    historyChartInstance = echarts.init(chartEl);
-  }
-
+  clearChartHost(historyChartInstance, chartEl);
+  historyChartInstance = ensureChartInstance(historyChartInstance, chartEl);
   historyChartInstance.setOption({
     tooltip: {
       trigger: 'axis',
@@ -222,12 +236,124 @@ export const renderHistoryChart = (historyData) => {
   }, true);
 };
 
+export const renderPortfolioProfitChart = (chartData) => {
+  const chartEl = document.getElementById('portfolioProfitChart');
+  if (!chartEl) return;
+
+  const labels = Array.isArray(chartData?.labels) ? chartData.labels : [];
+  const values = Array.isArray(chartData?.values) ? chartData.values : [];
+  const currentIdx = Number.isFinite(chartData?.currentIdx) ? chartData.currentIdx : labels.length - 1;
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (!labels.length || !finiteValues.length) {
+    portfolioProfitChartInstance = disposeChart(portfolioProfitChartInstance);
+    chartEl.innerHTML = '<div class="chart-empty-state">暂无可用的当日收益走势。</div>';
+    return;
+  }
+
+  clearChartHost(portfolioProfitChartInstance, chartEl);
+  portfolioProfitChartInstance = ensureChartInstance(portfolioProfitChartInstance, chartEl);
+  const currentValue = finiteValues[finiteValues.length - 1];
+  const positive = currentValue >= 0;
+  const lineColor = positive ? '#e5484d' : '#16a34a';
+  const areaStart = positive ? 'rgba(229, 72, 77, 0.18)' : 'rgba(22, 163, 74, 0.18)';
+  const areaEnd = positive ? 'rgba(229, 72, 77, 0.02)' : 'rgba(22, 163, 74, 0.02)';
+  const minValue = Math.min(...finiteValues);
+  const maxValue = Math.max(...finiteValues);
+  const boundPadding = Math.max((maxValue - minValue) * 0.18, 8);
+  const mobile = isMobileViewport();
+  const mobileTicks = new Set(['09:30', '11:30', '15:00']);
+
+  portfolioProfitChartInstance.setOption({
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => {
+        if (!params || params.length === 0) return '';
+        const point = params[0];
+        if (!Number.isFinite(point.value)) {
+          return `${point.axisValue}<br/>当日收益：-`;
+        }
+        return `${point.axisValue}<br/>当日收益：￥${Number(point.value).toLocaleString('zh-CN', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })}`;
+      }
+    },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: '12%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      boundaryGap: false,
+      max: currentIdx,
+      axisLabel: {
+        interval: mobile ? 0 : 9,
+        showMinLabel: true,
+        showMaxLabel: true,
+        hideOverlap: mobile,
+        fontSize: mobile ? 10 : 12,
+        margin: mobile ? 10 : 12,
+        formatter: (value) => {
+          if (!mobile) return value;
+          return mobileTicks.has(value) ? value : '';
+        }
+      },
+      axisTick: { show: false }
+    },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      min: Number((minValue - boundPadding).toFixed(2)),
+      max: Number((maxValue + boundPadding).toFixed(2)),
+      axisLabel: {
+        formatter: (value) => `￥${Number(value).toFixed(0)}`
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.12)'
+        }
+      }
+    },
+    series: [{
+      data: values,
+      type: 'line',
+      smooth: 0.22,
+      showSymbol: false,
+      connectNulls: false,
+      lineStyle: { width: 2.5, color: lineColor },
+      itemStyle: { color: lineColor },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: areaStart },
+          { offset: 1, color: areaEnd }
+        ])
+      },
+      markLine: {
+        silent: true,
+        symbol: 'none',
+        label: { show: false },
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.32)',
+          type: 'dashed'
+        },
+        data: [{ yAxis: 0 }]
+      }
+    }]
+  }, true);
+};
+
 export const resizeDetailCharts = () => {
-  if (intradayChartInstance) intradayChartInstance.resize();
-  if (historyChartInstance) historyChartInstance.resize();
+  if (intradayChartInstance && (!intradayChartInstance.isDisposed || !intradayChartInstance.isDisposed())) {
+    intradayChartInstance.resize();
+  }
+  if (historyChartInstance && (!historyChartInstance.isDisposed || !historyChartInstance.isDisposed())) {
+    historyChartInstance.resize();
+  }
+  if (portfolioProfitChartInstance && (!portfolioProfitChartInstance.isDisposed || !portfolioProfitChartInstance.isDisposed())) {
+    portfolioProfitChartInstance.resize();
+  }
 };
 
 export const disposeCharts = () => {
   intradayChartInstance = disposeChart(intradayChartInstance);
   historyChartInstance = disposeChart(historyChartInstance);
+  portfolioProfitChartInstance = disposeChart(portfolioProfitChartInstance);
 };

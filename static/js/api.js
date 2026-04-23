@@ -123,3 +123,19 @@ export const deleteUserFund = async (clientId, code) => {
   });
   return await response.json();
 };
+
+export const updateUserFundPosition = async (clientId, code, payload) => {
+  const response = await fetch(`/api/user/funds/${code}/position`, {
+    method: 'PUT',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const fetchPortfolio = async (clientId) => {
+  const response = await fetch('/api/user/portfolio', {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
