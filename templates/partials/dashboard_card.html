@@ -259,7 +259,7 @@
                       <span v-if="fund.nav_confirmed" class="fund-nav-status fund-nav-status--inline confirmed">已更新</span>
                     </div>
                     <div v-if="editingFundCode !== fund.code" class="fund-name-meta">
-                      <span class="fund-name-amount">[[ fund.has_position ? formatCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                      <span class="fund-name-amount">[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
                     </div>
                     <div v-if="editingFundCode !== fund.code" class="fund-name-meta fund-name-meta--sub">
                       <span class="fund-name-code">[[ fund.code ]]</span>
@@ -281,7 +281,7 @@
                       </button>
                     </div>
                     <div v-else class="fund-name-meta">
-                      <span class="fund-name-amount">[[ fund.has_position ? formatCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                      <span class="fund-name-amount">[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
                     </div>
                     <div v-else class="fund-name-meta fund-name-meta--sub">
                       <span class="fund-name-code">[[ fund.code ]]</span>

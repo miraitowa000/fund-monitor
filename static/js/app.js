@@ -45,12 +45,13 @@ import { createRefreshTimers } from './timers.js';
 
 const THEME_STORAGE_KEY = 'fundMonitorTheme';
 const RELEASE_NOTICE_STORAGE_KEY = 'fundMonitorReleaseNoticeSeen';
-const RELEASE_NOTICE_VERSION = 'release-2026-04-22-profit-upgrade';
+const RELEASE_NOTICE_VERSION = 'release-2026-04-24-search-list-polish';
+const RELEASE_NOTICE_TITLE = '更新说明';
 const RELEASE_NOTICE_ITEMS = [
-  { id: '1', text: '首页收益概览升级，支持查看总持仓市值、当日收益和持有收益。' },
-  { id: '2', text: '新增组合当日收益走势图，收益变化更直观。' },
-  { id: '3', text: '基金列表新增仓位占比展示，持仓信息更清晰。' },
-  { id: '4', text: '编辑持仓、分组管理和删除基金弹窗体验已优化，深色模式同步适配。' }
+  { id: '1', text: '新增基金搜索，支持按代码或名称快速查找。' },
+  { id: '2', text: '支持一次选择多只基金并批量添加。' },
+  { id: '3', text: '优化基金列表展示，补充单位净值和估算净值。' },
+  { id: '4', text: '优化分组展示与切换交互。' }
 ];
 
 const { createApp, ref, onMounted, onUnmounted, computed, nextTick, watch } = window.Vue;
@@ -166,6 +167,12 @@ const app = createApp({
       const n = parseNumber(val);
       if (!Number.isFinite(n)) return '-';
       return `¥${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    };
+
+    const formatInlineCurrency = (val) => {
+      const n = parseNumber(val);
+      if (!Number.isFinite(n)) return '-';
+      return `¥${n.toFixed(2)}`;
     };
 
     const formatPercentText = (val) => {
@@ -1351,6 +1358,7 @@ const app = createApp({
       positionActionError,
       releaseNoticeOpen,
       releaseNoticeVersion: RELEASE_NOTICE_VERSION,
+      releaseNoticeTitle: RELEASE_NOTICE_TITLE,
       releaseNoticeItems: RELEASE_NOTICE_ITEMS,
       monitorSummaryCards,
       portfolioSummaryCards,
@@ -1402,6 +1410,7 @@ const app = createApp({
       fetchData,
       formatHoldingChange,
       formatCurrency,
+      formatInlineCurrency,
       getDisplayEstimatedNav,
       getDisplayUnitNav,
       formatNavValue,

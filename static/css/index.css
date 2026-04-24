@@ -168,6 +168,7 @@ body[data-theme='dark'] #app .notice-banner__title {
   max-height: min(760px, calc(100dvh - 48px));
   display: flex;
   flex-direction: column;
+  min-height: 0;
   border-radius: 28px;
   overflow: hidden;
   border: 1px solid var(--border-color);
@@ -183,44 +184,22 @@ body[data-theme='dark'] #app .release-notice-modal {
 }
 
 .release-notice-modal__hero {
-  padding: 26px 28px 18px;
+  padding: 24px 28px 16px;
   border-bottom: 1px solid var(--border-color);
 }
 
-.release-notice-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-color);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.release-notice-badge::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 5px rgba(22, 119, 255, 0.12);
-}
-
 .release-notice-title {
-  margin: 18px 0 0;
-  font-size: 32px;
+  margin: 0;
+  font-size: 24px;
   font-weight: 800;
-  line-height: 1.18;
-  letter-spacing: -0.02em;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
 .release-notice-body {
   flex: 1 1 auto;
+  min-height: 0;
   display: grid;
   gap: 14px;
   padding: 22px 28px 16px;
@@ -266,6 +245,7 @@ body[data-theme='dark'] #app .release-notice-modal {
   gap: 14px;
   padding: 18px 28px 24px;
   border-top: 1px solid var(--border-color);
+  background: var(--bg-panel);
 }
 
 .release-notice-confirm {
@@ -1851,8 +1831,11 @@ body[data-theme='dark'] #app .group-tab-count {
 
 .fund-name-amount {
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-secondary);
+  line-height: 1.2;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .fund-name-group {
@@ -2997,20 +2980,34 @@ body[data-theme='dark'] #app .group-action-modal .btn-close {
 
 @media (max-width: 860px) {
   .release-notice-overlay {
-    padding: 16px;
+    padding: 8px;
     align-items: stretch;
   }
 
   .release-notice-modal {
     width: 100%;
-    max-height: calc(100vh - 32px);
-    max-height: calc(100dvh - 32px);
-    border-radius: 24px;
+    height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    border-radius: 20px;
     margin: auto 0;
   }
 
   .release-notice-title {
-    font-size: 26px;
+    font-size: 20px;
+  }
+
+  .release-notice-modal__hero {
+    padding: 18px 18px 14px;
+  }
+
+  .release-notice-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .release-notice-item {
@@ -3027,7 +3024,9 @@ body[data-theme='dark'] #app .group-action-modal .btn-close {
   .release-notice-footer {
     flex-direction: column;
     align-items: stretch;
-    padding-top: 14px;
+    padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+    position: relative;
+    z-index: 2;
   }
 
   .release-notice-confirm {
