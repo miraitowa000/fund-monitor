@@ -1,4 +1,5 @@
 import os
+import sys
 
 from flask import Flask, jsonify, render_template, request
 
@@ -8,6 +9,7 @@ from services.fund_service import (
     fetch_funds_parallel,
     get_fund_details,
     get_fund_networth_history,
+    search_funds,
     start_background_refresh_thread,
 )
 from services.index_service import get_indexes
@@ -100,6 +102,15 @@ def get_fund_history(fund_code):
     days = request.args.get('days', default=30, type=int)
     days = max(30, min(days, 365))
     response = jsonify(get_fund_networth_history(fund_code, days=days))
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
+
+
+@app.route('/api/fund/search', methods=['GET'])
+def api_search_funds():
+    keyword = request.args.get('q', default='', type=str)
+    limit = request.args.get('limit', default=10, type=int)
+    response = jsonify(search_funds(keyword, limit=limit))
     response.headers.add('Access-Control-Allow-Origin', '*')
     return response
 
@@ -230,6 +241,10 @@ def remove_user_fund(fund_code):
 
 if __name__ == '__main__':
     debug_enabled = os.getenv('FLASK_DEBUG', '1').strip().lower() not in ('0', 'false', 'no')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
     print('启动基金监控服务...')
     print('请在浏览器访问 http://127.0.0.1:5000')
     print(f'调试模式: {"on" if debug_enabled else "off"}')

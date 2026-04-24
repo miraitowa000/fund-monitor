@@ -11,6 +11,7 @@ import {
   moveUserFundGroup,
   renameFundGroup,
   saveUserFund,
+  searchFunds,
   updateUserFundPosition,
 } from './api.js';
 import {
@@ -118,6 +119,17 @@ const app = createApp({
       holding_amount: '',
       holding_profit: ''
     });
+    const quickSearchInput = ref('');
+    const quickSearchResults = ref([]);
+    const quickSearchLoading = ref(false);
+    const quickSearchError = ref('');
+    const quickSearchOpen = ref(false);
+    const quickAddSelection = ref([]);
+    const quickAddConfirmOpen = ref(false);
+    const quickAddGroupId = ref('');
+    const quickAddSaving = ref(false);
+    const summaryExpanded = ref(true);
+    const isMobileView = ref(false);
     const deletingFund = ref(false);
     const fundActionError = ref('');
     const pendingDeleteFund = ref({
@@ -136,6 +148,8 @@ const app = createApp({
     let clearAllModal = null;
     let resizeHandler = null;
     let latestHistoryRequestId = 0;
+    let quickSearchTimer = null;
+    let outsideClickHandler = null;
 
     const parseNumber = (val) => {
       const n = parseFloat(val);
@@ -158,6 +172,25 @@ const app = createApp({
       const n = parseNumber(val);
       if (!Number.isFinite(n)) return '-';
       return `${formatChange(n * 100, 2)}%`;
+    };
+
+    const formatNavValue = (val) => {
+      const n = parseNumber(val);
+      if (!Number.isFinite(n)) return '-';
+      return n.toFixed(4);
+    };
+
+    const getDisplayEstimatedNav = (fund) => {
+      if (!fund) return '-';
+      if (fund.nav_confirmed) {
+        return formatNavValue(fund.confirmed_nav || fund.dwjz);
+      }
+      return formatNavValue(fund.gsz);
+    };
+
+    const getDisplayUnitNav = (fund) => {
+      if (!fund) return '-';
+      return formatNavValue(fund.confirmed_nav || fund.dwjz);
     };
 
     const renderPortfolioProfitVisuals = async () => {
@@ -277,6 +310,17 @@ const app = createApp({
     const mobileTickerIndexes = computed(() => {
       if (!Array.isArray(indexes.value) || indexes.value.length === 0) return [];
       return indexes.value.concat(indexes.value);
+    });
+
+    const quickSearchResultsView = computed(() => quickSearchResults.value.map((item) => ({
+      ...item,
+      isExisting: savedCodes.value.includes(item.code),
+      isSelected: quickAddSelection.value.some((selected) => selected.code === item.code),
+    })));
+
+    const quickAddButtonText = computed(() => {
+      const count = quickAddSelection.value.length;
+      return count > 0 ? `添加${count}只` : '添加';
     });
 
     const monitorSummaryCards = computed(() => {
@@ -461,7 +505,7 @@ const app = createApp({
     });
 
     const selectedFundGroupName = computed(() => (
-      fundMetaMap.value[currentFundCode.value]?.group_name || '默认分组'
+      fundMetaMap.value[currentFundCode.value]?.group_name || '全部'
     ));
 
     const intradayDataTag = computed(() => {
@@ -527,8 +571,12 @@ const app = createApp({
       fundGroups.value = Array.isArray(snapshot?.groups) ? snapshot.groups : [];
       savedCodes.value = userFunds.value.map((item) => item.code);
 
-      if ((!selectedGroupId.value || !fundGroups.value.some((group) => String(group.id) === String(selectedGroupId.value))) && fundGroups.value.length > 0) {
-        selectedGroupId.value = String(fundGroups.value[0].id);
+      if (selectedGroupId.value && !fundGroups.value.some((group) => String(group.id) === String(selectedGroupId.value))) {
+        selectedGroupId.value = '';
+      }
+
+      if (quickAddGroupId.value && !fundGroups.value.some((group) => String(group.id) === String(quickAddGroupId.value))) {
+        quickAddGroupId.value = '';
       }
 
       if (!tabGroups.value.some((group) => String(group.id) === String(activeGroupId.value))) {
@@ -728,7 +776,7 @@ const app = createApp({
       const incoming = codeInput.value.split(/[,\uFF0C\s]+/).filter((code) => code.trim());
       if (incoming.length === 0) return;
 
-      const groupId = selectedGroupId.value || (fundGroups.value[0] ? String(fundGroups.value[0].id) : '');
+      const groupId = selectedGroupId.value || '';
       const results = await Promise.all(incoming.map((code) => saveUserFund(clientId, code, groupId)));
       const error = results.find((item) => item.error);
       if (error) {
@@ -764,6 +812,134 @@ const app = createApp({
     const closeInlineGroupCreate = () => {
       addingGroupInline.value = false;
       newGroupName.value = '';
+    };
+
+    const clearQuickSearchTimer = () => {
+      if (!quickSearchTimer) return;
+      clearTimeout(quickSearchTimer);
+      quickSearchTimer = null;
+    };
+
+    const performQuickSearch = async (keyword) => {
+      const q = String(keyword || '').trim();
+      if (!q) {
+        quickSearchResults.value = [];
+        quickSearchError.value = '';
+        return;
+      }
+      quickSearchLoading.value = true;
+      quickSearchError.value = '';
+      try {
+        const result = await searchFunds(q, 10);
+        if (String(quickSearchInput.value || '').trim() !== q) return;
+        quickSearchResults.value = Array.isArray(result) ? result : [];
+      } catch {
+        quickSearchResults.value = [];
+        quickSearchError.value = '搜索失败，请稍后重试';
+      } finally {
+        if (String(quickSearchInput.value || '').trim() === q) {
+          quickSearchLoading.value = false;
+        }
+      }
+    };
+
+    const scheduleQuickSearch = (keyword) => {
+      clearQuickSearchTimer();
+      const q = String(keyword || '').trim();
+      if (!q) {
+        quickSearchLoading.value = false;
+        quickSearchError.value = '';
+        quickSearchResults.value = [];
+        quickSearchOpen.value = false;
+        return;
+      }
+      quickSearchOpen.value = true;
+      quickSearchTimer = setTimeout(() => {
+        performQuickSearch(q);
+      }, 200);
+    };
+
+    const handleQuickSearchFocus = () => {
+      if (quickSearchResultsView.value.length > 0 || quickSearchLoading.value || String(quickSearchInput.value || '').trim()) {
+        quickSearchOpen.value = true;
+      }
+    };
+
+    const focusQuickSearchFirst = () => {
+      quickSearchOpen.value = true;
+    };
+
+    const toggleQuickAddSelection = (item) => {
+      if (!item || !item.code || savedCodes.value.includes(item.code)) return;
+      const idx = quickAddSelection.value.findIndex((selected) => selected.code === item.code);
+      if (idx >= 0) {
+        quickAddSelection.value.splice(idx, 1);
+        return;
+      }
+      quickAddSelection.value.push({
+        code: item.code,
+        name: item.name || item.code
+      });
+    };
+
+    const removeQuickAddSelection = (code) => {
+      quickAddSelection.value = quickAddSelection.value.filter((item) => item.code !== code);
+      if (quickAddSelection.value.length === 0 && !String(quickSearchInput.value || '').trim()) {
+        quickSearchOpen.value = false;
+      }
+    };
+
+    const openQuickAddConfirm = () => {
+      if (quickAddSelection.value.length === 0) return;
+      quickAddGroupId.value = activeGroupId.value !== 'all' ? String(activeGroupId.value) : '';
+      quickAddConfirmOpen.value = true;
+      quickSearchOpen.value = false;
+    };
+
+    const closeQuickAddConfirm = () => {
+      quickAddConfirmOpen.value = false;
+    };
+
+    const confirmQuickAddFunds = async () => {
+      if (quickAddSelection.value.length === 0) return;
+      quickAddSaving.value = true;
+      try {
+        const groupId = quickAddGroupId.value || '';
+        const results = await Promise.all(
+          quickAddSelection.value.map((item) => saveUserFund(clientId, item.code, groupId))
+        );
+        const error = results.find((item) => item.error);
+        if (error) {
+          alert(error.error || '添加基金失败');
+          return;
+        }
+        quickAddSelection.value = [];
+        quickSearchInput.value = '';
+        quickSearchResults.value = [];
+        quickSearchOpen.value = false;
+        quickAddConfirmOpen.value = false;
+        await fetchData();
+      } finally {
+        quickAddSaving.value = false;
+      }
+    };
+
+    const toggleSummaryExpanded = () => {
+      if (!isMobileView.value) return;
+      summaryExpanded.value = !summaryExpanded.value;
+    };
+
+    const handleGroupTabClick = async (group) => {
+      if (!group) return;
+      if (
+        isMobileView.value
+        && String(activeGroupId.value) === String(group.id)
+        && String(group.id) !== 'all'
+      ) {
+        openRenameGroupModal();
+        return;
+      }
+      await switchGroup(group.id);
     };
 
     const ensureGroupModals = () => {
@@ -852,7 +1028,6 @@ const app = createApp({
     };
 
     const changeFundGroup = async (code, groupId) => {
-      if (!groupId) return;
       const result = await moveUserFundGroup(clientId, code, groupId);
       if (result.error) {
         alert(result.error);
@@ -1013,7 +1188,20 @@ const app = createApp({
       });
       startClockTimer();
       timers.start();
+      isMobileView.value = isMobileViewport();
+      outsideClickHandler = (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (!target.closest('.topbar-fund-search')) {
+          quickSearchOpen.value = false;
+        }
+      };
+      document.addEventListener('click', outsideClickHandler);
       resizeHandler = () => {
+        isMobileView.value = isMobileViewport();
+        if (!isMobileView.value) {
+          summaryExpanded.value = true;
+        }
         resizeDetailCharts();
         if (!isMobileViewport()) {
           closeMobileDetail();
@@ -1032,12 +1220,21 @@ const app = createApp({
     onUnmounted(() => {
       timers.stop();
       stopClockTimer();
+      clearQuickSearchTimer();
       disposeCharts();
       if (resizeHandler) {
         window.removeEventListener('resize', resizeHandler);
         resizeHandler = null;
       }
+      if (outsideClickHandler) {
+        document.removeEventListener('click', outsideClickHandler);
+        outsideClickHandler = null;
+      }
       syncBodyDetailState(false);
+    });
+
+    watch(quickSearchInput, (value) => {
+      scheduleQuickSearch(value);
     });
 
     return {
@@ -1086,6 +1283,19 @@ const app = createApp({
       portfolioItems,
       portfolioSummary,
       positionForm,
+      quickSearchInput,
+      quickSearchResults,
+      quickSearchResultsView,
+      quickSearchLoading,
+      quickSearchError,
+      quickSearchOpen,
+      quickAddSelection,
+      quickAddConfirmOpen,
+      quickAddGroupId,
+      quickAddSaving,
+      quickAddButtonText,
+      summaryExpanded,
+      isMobileView,
       deletingFund,
       fundActionError,
       pendingDeleteFund,
@@ -1110,10 +1320,18 @@ const app = createApp({
       setDetailTab,
       ensureHistoryRange,
       toggleSort,
+      toggleSummaryExpanded,
       addFunds,
       addGroup,
       openInlineGroupCreate,
       closeInlineGroupCreate,
+      handleQuickSearchFocus,
+      focusQuickSearchFirst,
+      toggleQuickAddSelection,
+      removeQuickAddSelection,
+      openQuickAddConfirm,
+      closeQuickAddConfirm,
+      confirmQuickAddFunds,
       openRenameGroupModal,
       closeRenameGroupModal,
       confirmRenameGroup,
@@ -1121,6 +1339,7 @@ const app = createApp({
       closeDeleteGroupModal,
       confirmDeleteGroup,
       changeFundGroup,
+      handleGroupTabClick,
       startEditFundGroup,
       stopEditFundGroup,
       switchGroup,
@@ -1136,6 +1355,9 @@ const app = createApp({
       fetchData,
       formatHoldingChange,
       formatCurrency,
+      getDisplayEstimatedNav,
+      getDisplayUnitNav,
+      formatNavValue,
       formatPercentText,
       formatChange,
       getColorClass,
