@@ -211,6 +211,52 @@ const app = createApp({
       document.body.classList.toggle('detail-modal-open', Boolean(open));
     };
 
+    const loadLazyImage = (img) => {
+      if (!(img instanceof HTMLImageElement)) return;
+      if (img.dataset.loaded === 'true') return;
+      const source = String(img.dataset.src || '').trim();
+      if (!source) return;
+      img.src = source;
+      img.dataset.loaded = 'true';
+    };
+
+    const loadLazyImagesInContainer = (container) => {
+      if (!(container instanceof Element)) return;
+      container.querySelectorAll('img[data-src]').forEach((img) => {
+        loadLazyImage(img);
+      });
+    };
+
+    const bindModalLazyImages = () => {
+      const qrModalEl = document.getElementById('qrModal');
+      if (qrModalEl) {
+        qrModalEl.addEventListener('show.bs.modal', () => {
+          loadLazyImagesInContainer(qrModalEl);
+        }, { once: true });
+      }
+
+      const donateModalEl = document.getElementById('donateModal');
+      if (donateModalEl) {
+        donateModalEl.addEventListener('show.bs.modal', () => {
+          const activePane = donateModalEl.querySelector('.tab-pane.active, .tab-pane.show.active');
+          if (activePane) {
+            loadLazyImagesInContainer(activePane);
+          } else {
+            loadLazyImagesInContainer(donateModalEl);
+          }
+        }, { once: true });
+
+        donateModalEl.querySelectorAll('[data-bs-toggle="tab"]').forEach((tab) => {
+          tab.addEventListener('shown.bs.tab', (event) => {
+            const selector = event?.target?.getAttribute('data-bs-target');
+            if (!selector) return;
+            const pane = donateModalEl.querySelector(selector);
+            loadLazyImagesInContainer(pane);
+          });
+        });
+      }
+    };
+
     const openMobileDetail = () => {
       if (!isMobileViewport()) return;
       mobileDetailOpen.value = true;
@@ -1185,6 +1231,7 @@ const app = createApp({
       fetchData();
       nextTick(() => {
         ensureGroupModals();
+        bindModalLazyImages();
       });
       startClockTimer();
       timers.start();

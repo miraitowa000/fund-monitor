@@ -1,7 +1,8 @@
 import os
 import sys
+from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, url_for
 
 from core.runtime import register_watched_codes
 from core.settings import build_mysql_uri
@@ -54,6 +55,28 @@ def _require_client_id():
     if not client_id:
         return None, (_add_cors_headers(jsonify({'error': 'Missing X-Client-Id header'})), 400)
     return client_id, None
+
+
+def asset_url(filename):
+    normalized = str(filename or '').lstrip('/')
+    if normalized.startswith('static/'):
+        normalized = normalized[7:]
+
+    version = '1'
+    try:
+        asset_path = Path(app.static_folder) / normalized
+        version = str(int(asset_path.stat().st_mtime))
+    except OSError:
+        pass
+
+    return url_for('static', filename=normalized, v=version)
+
+
+@app.context_processor
+def inject_asset_helpers():
+    return {
+        'asset_url': asset_url,
+    }
 
 
 @app.route('/')
