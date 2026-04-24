@@ -126,6 +126,67 @@ def get_fund_name_by_code(fund_code):
         return ''
 
 
+def search_funds(keyword, limit=10):
+    cache = get_cached_fund_list()
+    if not cache:
+        return []
+
+    query = str(keyword or '').strip()
+    if not query:
+        return []
+
+    normalized_query = _clean_name(query).lower()
+    if not normalized_query:
+        return []
+
+    try:
+        max_items = max(1, min(int(limit), 20))
+    except Exception:
+        max_items = 10
+
+    df = cache.get('df')
+    code_col = cache.get('code_col')
+    name_col = cache.get('name_col')
+    if df is None or not code_col or not name_col:
+        return []
+
+    try:
+        records = []
+        for row in df[[code_col, name_col, 'clean_name']].to_dict('records'):
+            code = str(row.get(code_col, '') or '').zfill(6)
+            name = str(row.get(name_col, '') or '').strip()
+            clean_name = str(row.get('clean_name', '') or '').lower()
+            if not code or not name:
+                continue
+
+            score = None
+            if code == normalized_query:
+                score = 0
+            elif code.startswith(normalized_query):
+                score = 1
+            elif normalized_query in clean_name:
+                score = 2
+            elif normalized_query in name.lower():
+                score = 3
+
+            if score is None:
+                continue
+
+            records.append({
+                'code': code,
+                'name': name,
+                'match_score': score,
+            })
+
+        records.sort(key=lambda item: (item['match_score'], len(item['code']), item['code']))
+        return [
+            {'code': item['code'], 'name': item['name']}
+            for item in records[:max_items]
+        ]
+    except Exception:
+        return []
+
+
 def get_pingzhongdata_snapshot(fund_code):
     code = str(fund_code).zfill(6)
     cached = cache_get('pingzhong', code, TTL_PINGZHONG_SECONDS)

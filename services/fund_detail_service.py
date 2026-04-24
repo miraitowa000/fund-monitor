@@ -309,8 +309,9 @@ def get_fund_networth_history(fund_code, days=30):
         seen_dates = set()
         page_index = 1
         page_size = 100
+        max_pages = 30
 
-        while page_index <= 5:
+        while page_index <= max_pages:
             response = http_get(
                 f"https://api.fund.eastmoney.com/f10/lsjz?fundCode={code}&pageIndex={page_index}&pageSize={page_size}&startDate={start_date_text}&endDate={end_date_text}",
                 headers=headers,
@@ -340,13 +341,20 @@ def get_fund_networth_history(fund_code, days=30):
                     continue
 
             total_count = int(payload.get('TotalCount') or 0)
-            if len(result) >= total_count or len(page_items) < page_size:
+            actual_page_size = len(page_items)
+            if total_count > 0 and len(result) >= total_count:
+                break
+            if actual_page_size == 0:
                 break
             page_index += 1
 
         result.sort(key=lambda item: item.get('date', ''))
         if result:
-            return {'success': True, 'data': result}
+            filtered = [
+                item for item in result
+                if start_date_text <= str(item.get('date', '')) <= end_date_text
+            ]
+            return {'success': True, 'data': filtered}
     except Exception as e:
         api_error = str(e)
     try:
@@ -362,7 +370,12 @@ def get_fund_networth_history(fund_code, days=30):
                 result.append({'date': item_date.strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
             except Exception:
                 continue
-        return {'success': bool(result), 'data': result}
+        result.sort(key=lambda item: item.get('date', ''))
+        filtered = [
+            item for item in result
+            if start_date_text <= str(item.get('date', '')) <= end_date_text
+        ]
+        return {'success': bool(filtered), 'data': filtered}
     except Exception as e:
         return {'success': False, 'data': [], 'error': locals().get('api_error') or str(e)}
 
@@ -406,14 +419,15 @@ def get_fund_details(fund_code):
             return res
         return cache_get_stale('holdings', code) or res
     def load_history():
-        cached = cache_get('history', code, TTL_HISTORY_SECONDS)
+        history_cache_key = f'{code}:30'
+        cached = cache_get('history', history_cache_key, TTL_HISTORY_SECONDS)
         if cached:
             return cached
         res = get_fund_networth_history(code, days=30)
         if res and res.get('success'):
-            cache_set('history', code, res)
+            cache_set('history', history_cache_key, res)
             return res
-        return cache_get_stale('history', code) or res
+        return cache_get_stale('history', history_cache_key) or res
     holdings = DETAIL_EXECUTOR.submit(load_holdings).result()
     history = DETAIL_EXECUTOR.submit(load_history).result()
     result = {'basic': basic if basic else {'success': False}, 'holdings': holdings if holdings else {'success': False, 'holdings': []}, 'history': history if history else {'success': False, 'data': []}, 'intraday': build_intraday_from_basic(basic)}

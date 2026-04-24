@@ -1,6 +1,7 @@
 from services.fund_basic_service import (
     fetch_funds_parallel,
     get_fund_estimate,
+    search_funds,
     start_background_refresh_thread,
 )
 from services.fund_detail_service import (
@@ -27,5 +28,6 @@ __all__ = [
     'get_realtime_stock_quotes',
     'normalize_stock_symbol',
     'quote_name_matches',
+    'search_funds',
     'start_background_refresh_thread',
 ]

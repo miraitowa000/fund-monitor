@@ -56,6 +56,13 @@ export const loadFundHistory = async (code, days) => {
   return await response.json();
 };
 
+export const searchFunds = async (keyword, limit = 10) => {
+  const q = String(keyword || '').trim();
+  if (!q) return [];
+  const response = await fetch(`/api/fund/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`);
+  return await response.json();
+};
+
 export const fetchUserFundsMeta = async (clientId) => {
   const response = await fetch('/api/user/funds-meta', {
     headers: withClientHeaders(clientId)
