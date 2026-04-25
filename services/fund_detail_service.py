@@ -1,11 +1,28 @@
 import re
+import threading
+import time
 from datetime import datetime, timedelta
 
 from bs4 import BeautifulSoup
 
 from core.cache import cache_get, cache_get_stale, cache_set
 from core.http import http_get
+from core.perf_metrics import increment_metric
 from core.runtime import DETAIL_EXECUTOR, register_watched_codes
+from services.history_cache_service import (
+    acquire_history_refresh_lock,
+    get_fund_history as get_cached_fund_history,
+    get_stale_fund_history,
+    release_history_refresh_lock,
+    set_fund_history,
+)
+from services.detail_cache_service import (
+    acquire_detail_refresh_lock,
+    get_fund_detail as get_cached_fund_detail,
+    get_stale_fund_detail,
+    release_detail_refresh_lock,
+    set_fund_detail,
+)
 from services.fund_basic_service import (
     LINK_ETF_MANUAL_MAP,
     TTL_DETAIL_SECONDS,
@@ -24,6 +41,16 @@ try:
     import akshare as ak
 except Exception:
     ak = None
+
+
+_INFLIGHT_DETAIL = {}
+_INFLIGHT_DETAIL_LOCK = threading.Lock()
+DETAIL_REFRESH_LOCK_SECONDS = 10
+DETAIL_WAIT_FOR_REMOTE_REFRESH_SECONDS = 3
+DETAIL_WAIT_STEP_SECONDS = 0.1
+HISTORY_REFRESH_LOCK_SECONDS = 10
+HISTORY_WAIT_FOR_REMOTE_REFRESH_SECONDS = 3
+HISTORY_WAIT_STEP_SECONDS = 0.1
 
 
 def _clean_name(name):
@@ -293,8 +320,8 @@ def get_fund_holdings(fund_code):
         return {'success': False, 'holdings': [], 'error': str(e)}
 
 
-def get_fund_networth_history(fund_code, days=30):
-    code = str(fund_code).zfill(6)
+def _fetch_fund_networth_history(code, days, history_cache_key):
+    code = str(code).zfill(6)
     days = max(30, min(int(days or 30), 365))
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days)
@@ -354,7 +381,10 @@ def get_fund_networth_history(fund_code, days=30):
                 item for item in result
                 if start_date_text <= str(item.get('date', '')) <= end_date_text
             ]
-            return {'success': True, 'data': filtered}
+            payload = {'success': True, 'data': filtered}
+            cache_set('history', history_cache_key, payload)
+            set_fund_history(code, days, payload)
+            return payload
     except Exception as e:
         api_error = str(e)
     try:
@@ -375,9 +405,61 @@ def get_fund_networth_history(fund_code, days=30):
             item for item in result
             if start_date_text <= str(item.get('date', '')) <= end_date_text
         ]
-        return {'success': bool(filtered), 'data': filtered}
+        payload = {'success': bool(filtered), 'data': filtered}
+        if filtered:
+            cache_set('history', history_cache_key, payload)
+            set_fund_history(code, days, payload)
+        return payload
     except Exception as e:
         return {'success': False, 'data': [], 'error': locals().get('api_error') or str(e)}
+
+
+def _fetch_history_and_release_lock(code, days, history_cache_key, lock_token):
+    try:
+        return _fetch_fund_networth_history(code, days, history_cache_key)
+    finally:
+        release_history_refresh_lock(code, days, lock_token)
+
+
+def _wait_for_remote_history_refresh(code, days, history_cache_key, wait_seconds=HISTORY_WAIT_FOR_REMOTE_REFRESH_SECONDS):
+    deadline = time.time() + max(wait_seconds, HISTORY_WAIT_STEP_SECONDS)
+    while time.time() < deadline:
+        fresh = get_cached_fund_history(code, days, TTL_HISTORY_SECONDS)
+        if fresh:
+            cache_set('history', history_cache_key, fresh)
+            return fresh
+        time.sleep(HISTORY_WAIT_STEP_SECONDS)
+
+    stale = get_stale_fund_history(code, days) or cache_get_stale('history', history_cache_key)
+    if stale:
+        increment_metric('cache.history.stale_hit')
+        cache_set('history', history_cache_key, stale)
+    return stale or {'success': False, 'data': []}
+
+
+def get_fund_networth_history(fund_code, days=30):
+    code = str(fund_code).zfill(6)
+    days = max(30, min(int(days or 30), 365))
+    history_cache_key = f'{code}:{days}'
+
+    local_cached = cache_get('history', history_cache_key, TTL_HISTORY_SECONDS)
+    if local_cached:
+        increment_metric('cache.history.local_hit')
+        return local_cached
+
+    redis_cached = get_cached_fund_history(code, days, TTL_HISTORY_SECONDS)
+    if redis_cached:
+        increment_metric('cache.history.redis_hit')
+        cache_set('history', history_cache_key, redis_cached)
+        return redis_cached
+
+    lock_token = acquire_history_refresh_lock(code, days, HISTORY_REFRESH_LOCK_SECONDS)
+    if lock_token:
+        increment_metric('cache.history.refresh_owner')
+        return _fetch_history_and_release_lock(code, days, history_cache_key, lock_token)
+
+    increment_metric('cache.history.refresh_waiter')
+    return _wait_for_remote_history_refresh(code, days, history_cache_key)
 
 
 def build_intraday_from_basic(estimate):
@@ -402,13 +484,9 @@ def get_fund_intraday(fund_code):
     return build_intraday_from_basic(get_fund_estimate(fund_code))
 
 
-def get_fund_details(fund_code):
-    code = str(fund_code).zfill(6)
-    register_watched_codes([code])
-    cached_detail = cache_get('detail', code, TTL_DETAIL_SECONDS)
-    if cached_detail:
-        return cached_detail
+def _build_fund_details(code):
     basic = load_basic_for_detail(code)
+
     def load_holdings():
         cached = cache_get('holdings', code, TTL_HOLDINGS_SECONDS)
         if cached:
@@ -418,6 +496,7 @@ def get_fund_details(fund_code):
             cache_set('holdings', code, res)
             return res
         return cache_get_stale('holdings', code) or res
+
     def load_history():
         history_cache_key = f'{code}:30'
         cached = cache_get('history', history_cache_key, TTL_HISTORY_SECONDS)
@@ -428,8 +507,87 @@ def get_fund_details(fund_code):
             cache_set('history', history_cache_key, res)
             return res
         return cache_get_stale('history', history_cache_key) or res
-    holdings = DETAIL_EXECUTOR.submit(load_holdings).result()
-    history = DETAIL_EXECUTOR.submit(load_history).result()
-    result = {'basic': basic if basic else {'success': False}, 'holdings': holdings if holdings else {'success': False, 'holdings': []}, 'history': history if history else {'success': False, 'data': []}, 'intraday': build_intraday_from_basic(basic)}
+
+    holdings_future = DETAIL_EXECUTOR.submit(load_holdings)
+    history_future = DETAIL_EXECUTOR.submit(load_history)
+    holdings = holdings_future.result()
+    history = history_future.result()
+    result = {
+        'basic': basic if basic else {'success': False},
+        'holdings': holdings if holdings else {'success': False, 'holdings': []},
+        'history': history if history else {'success': False, 'data': []},
+        'intraday': build_intraday_from_basic(basic),
+    }
     cache_set('detail', code, result)
+    set_fund_detail(code, result)
     return result
+
+
+def _build_details_and_release_lock(code, lock_token):
+    try:
+        return _build_fund_details(code)
+    finally:
+        release_detail_refresh_lock(code, lock_token)
+
+
+def _wait_for_remote_detail_refresh(code, wait_seconds=DETAIL_WAIT_FOR_REMOTE_REFRESH_SECONDS):
+    deadline = time.time() + max(wait_seconds, DETAIL_WAIT_STEP_SECONDS)
+    while time.time() < deadline:
+        fresh = get_cached_fund_detail(code, TTL_DETAIL_SECONDS)
+        if fresh:
+            cache_set('detail', code, fresh)
+            return fresh
+        time.sleep(DETAIL_WAIT_STEP_SECONDS)
+
+    stale = get_stale_fund_detail(code) or cache_get_stale('detail', code)
+    if stale:
+        increment_metric('cache.detail.stale_hit')
+        cache_set('detail', code, stale)
+    return stale
+
+
+def get_fund_details(fund_code):
+    code = str(fund_code).zfill(6)
+    register_watched_codes([code])
+    cached_detail = cache_get('detail', code, TTL_DETAIL_SECONDS)
+    if cached_detail:
+        increment_metric('cache.detail.local_hit')
+        return cached_detail
+    redis_detail = get_cached_fund_detail(code, TTL_DETAIL_SECONDS)
+    if redis_detail:
+        increment_metric('cache.detail.redis_hit')
+        cache_set('detail', code, redis_detail)
+        return redis_detail
+    with _INFLIGHT_DETAIL_LOCK:
+        future = _INFLIGHT_DETAIL.get(code)
+        if future is None or future.done():
+            lock_token = acquire_detail_refresh_lock(code, DETAIL_REFRESH_LOCK_SECONDS)
+            if lock_token:
+                increment_metric('cache.detail.refresh_owner')
+                future = DETAIL_EXECUTOR.submit(_build_details_and_release_lock, code, lock_token)
+            else:
+                increment_metric('cache.detail.refresh_waiter')
+                future = DETAIL_EXECUTOR.submit(_wait_for_remote_detail_refresh, code)
+            _INFLIGHT_DETAIL[code] = future
+
+            def _cleanup(done_future, code_key=code):
+                with _INFLIGHT_DETAIL_LOCK:
+                    current = _INFLIGHT_DETAIL.get(code_key)
+                    if current is done_future:
+                        _INFLIGHT_DETAIL.pop(code_key, None)
+
+            future.add_done_callback(_cleanup)
+
+    try:
+        result = future.result()
+        if result:
+            return result
+    except Exception:
+        pass
+
+    stale_detail = cache_get_stale('detail', code) or get_stale_fund_detail(code)
+    if stale_detail:
+        increment_metric('cache.detail.stale_hit')
+        cache_set('detail', code, stale_detail)
+        return stale_detail
+    raise RuntimeError(f'failed to load fund detail for {code}')

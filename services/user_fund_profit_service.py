@@ -1,6 +1,12 @@
 from datetime import datetime
 
+from core.perf_metrics import increment_metric
 from services.fund_service import fetch_funds_parallel
+from services.portfolio_cache_service import (
+    get_stale_user_portfolio,
+    get_user_portfolio as get_cached_user_portfolio,
+    set_user_portfolio,
+)
 from services.user_fund_service import list_user_funds
 
 
@@ -130,8 +136,8 @@ def _build_position_item(meta, quote, total_holding_amount=0.0):
     return item
 
 
-def get_user_portfolio(client_id):
-    user_funds = list_user_funds(client_id)
+def _build_user_portfolio_payload(client_id, user_funds=None):
+    user_funds = user_funds if user_funds is not None else list_user_funds(client_id)
     codes = [item['code'] for item in user_funds]
     quotes = fetch_funds_parallel(codes) if codes else []
     quote_map = _build_quote_map(quotes)
@@ -190,3 +196,24 @@ def get_user_portfolio(client_id):
         },
         'items': items,
     }
+
+
+def get_user_portfolio(client_id, force_refresh=False, user_funds=None):
+    if not force_refresh:
+        cached = get_cached_user_portfolio(client_id)
+        if cached:
+            increment_metric('cache.portfolio.hit')
+            return cached
+        increment_metric('cache.portfolio.miss')
+    else:
+        increment_metric('cache.portfolio.force_refresh')
+
+    try:
+        payload = _build_user_portfolio_payload(client_id, user_funds=user_funds)
+        set_user_portfolio(client_id, payload)
+        return payload
+    except Exception:
+        stale = get_stale_user_portfolio(client_id)
+        if stale:
+            return stale
+        raise

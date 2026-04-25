@@ -1,40 +1,7 @@
-import {
-  hasUsableFundListData,
-  loadFundListFromCache,
-  saveFundListToCache,
-  saveFundSnapshotsToCache,
-} from './cache.js';
-
 const withClientHeaders = (clientId, headers = {}) => ({
   ...headers,
   'X-Client-Id': clientId
 });
-
-export const fetchFundsRaw = async (codes) => {
-  try {
-    if (!codes || codes.length === 0) return [];
-    const response = await fetch('/api/funds', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ codes })
-    });
-
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
-      console.warn('获取基金数据失败，回退到本地缓存', response.status);
-      return loadFundListFromCache() || [];
-    }
-
-    const data = await response.json();
-    if (hasUsableFundListData(data)) {
-      saveFundSnapshotsToCache(data);
-      saveFundListToCache(data);
-    }
-    return data;
-  } catch (error) {
-    console.error('获取基金数据失败:', error);
-    return loadFundListFromCache() || [];
-  }
-};
 
 export const fetchIndexesRaw = async () => {
   try {
@@ -70,8 +37,8 @@ export const fetchUserFundsMeta = async (clientId) => {
   return await response.json();
 };
 
-export const bootstrapUserFunds = async (clientId, codes) => {
-  const response = await fetch('/api/user/bootstrap', {
+export const fetchDashboardBootstrap = async (clientId, codes = []) => {
+  const response = await fetch('/api/dashboard/bootstrap', {
     method: 'POST',
     headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
     body: JSON.stringify({ codes })

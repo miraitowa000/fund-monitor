@@ -1,6 +1,5 @@
 export const INTRADAY_CACHE_KEY = 'fundIntradaySnapshotsV1';
 export const INTRADAY_STEP_MINUTES = 3;
-export const FUND_LIST_CACHE_KEY = 'fundListSnapshot';
 
 export const TRADING_MINUTES = (() => {
   const list = [];
@@ -68,30 +67,6 @@ export const readIntradayCache = () => {
 
 export const writeIntradayCache = (data) => {
   localStorage.setItem(INTRADAY_CACHE_KEY, JSON.stringify(data));
-};
-
-export const hasUsableFundListData = (data) => Array.isArray(data) && data.some((item) => {
-  if (!item || typeof item !== 'object') return false;
-  return [item.gsz, item.dwjz].some((v) => v !== null && v !== undefined && v !== '' && v !== '-');
-});
-
-export const saveFundListToCache = (data) => {
-  try {
-    if (hasUsableFundListData(data)) {
-      localStorage.setItem(FUND_LIST_CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
-    }
-  } catch {}
-};
-
-export const loadFundListFromCache = () => {
-  try {
-    const raw = localStorage.getItem(FUND_LIST_CACHE_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    return Array.isArray(obj.data) ? obj.data : null;
-  } catch {
-    return null;
-  }
 };
 
 export const saveFundSnapshotsToCache = (fundList) => {
