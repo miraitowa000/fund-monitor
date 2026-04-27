@@ -6,7 +6,8 @@ import time
 from core.redis_client import get_redis_client
 
 
-REDIS_DASHBOARD_TTL_SECONDS = 3
+# dashboard bootstrap 体积较大且首屏频繁访问，TTL 太短会导致高峰回源风暴
+REDIS_DASHBOARD_TTL_SECONDS = 15
 
 
 def _normalize_client_id(client_id):

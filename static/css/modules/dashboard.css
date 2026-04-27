@@ -417,7 +417,8 @@ body[data-theme='dark'] #app .page-top-search-panel .theme-toggle-btn {
   border: 1px solid var(--border-color);
   background: var(--bg-panel);
   box-shadow: 0 30px 72px rgba(15, 23, 42, 0.22);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
 }
 
 .quick-add-confirm__header,
@@ -449,6 +450,8 @@ body[data-theme='dark'] #app .page-top-search-panel .theme-toggle-btn {
 
 .quick-add-confirm__body {
   padding: 18px 22px 22px;
+  position: relative;
+  z-index: 2;
 }
 
 .quick-add-confirm__list {
@@ -467,15 +470,91 @@ body[data-theme='dark'] #app .page-top-search-panel .theme-toggle-btn {
   background: rgba(240, 249, 255, 0.92);
 }
 
-.quick-add-confirm__group .form-select {
-  border-radius: 12px;
-  border-color: var(--border-color);
-  background-color: var(--bg-input);
-  color: var(--text-primary);
-}
-
 .quick-add-confirm__group .form-label {
   color: var(--text-secondary);
+}
+
+.quick-add-confirm__group-picker {
+  position: relative;
+  z-index: 6;
+}
+
+.quick-add-confirm__group-trigger {
+  width: 100%;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  box-shadow: none;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.quick-add-confirm__group-trigger svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+
+.quick-add-confirm__group-trigger.is-open svg {
+  transform: rotate(180deg);
+}
+
+.quick-add-confirm__group-trigger:focus,
+.quick-add-confirm__group-trigger.is-open {
+  border-color: rgba(96, 165, 250, 0.9);
+  box-shadow: 0 0 0 0.2rem rgba(59, 130, 246, 0.18);
+}
+
+.quick-add-confirm__group-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-panel);
+  box-shadow: 0 20px 42px rgba(15, 23, 42, 0.18);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.quick-add-confirm__group-option {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  padding: 11px 12px;
+  font-size: 14px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.quick-add-confirm__group-option:hover {
+  background: var(--bg-hover);
+}
+
+.quick-add-confirm__group-option.is-selected {
+  background: var(--brand-soft);
+  color: var(--brand-color);
+  font-weight: 700;
 }
 
 body[data-theme='dark'] #app .quick-add-confirm {
@@ -496,19 +575,33 @@ body[data-theme='dark'] #app .quick-add-confirm__remove {
   color: #9fb0cb;
 }
 
-body[data-theme='dark'] #app .quick-add-confirm__group .form-select {
-  border-color: rgba(71, 85, 105, 0.8);
-  background-color: rgba(15, 23, 42, 0.96);
-  color: #e5eefc;
-}
-
 body[data-theme='dark'] #app .quick-add-confirm__group .form-label {
   color: #9fb0cb !important;
 }
 
-body[data-theme='dark'] #app .quick-add-confirm__group .form-select:focus {
-  border-color: rgba(96, 165, 250, 0.9);
-  box-shadow: 0 0 0 0.2rem rgba(59, 130, 246, 0.18);
+body[data-theme='dark'] #app .quick-add-confirm__group-trigger {
+  border-color: rgba(71, 85, 105, 0.8);
+  background: rgba(15, 23, 42, 0.96);
+  color: #e5eefc;
+}
+
+body[data-theme='dark'] #app .quick-add-confirm__group-menu {
+  border-color: rgba(71, 85, 105, 0.8);
+  background: rgba(11, 21, 37, 0.98);
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.34);
+}
+
+body[data-theme='dark'] #app .quick-add-confirm__group-option {
+  color: #e5eefc;
+}
+
+body[data-theme='dark'] #app .quick-add-confirm__group-option:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+body[data-theme='dark'] #app .quick-add-confirm__group-option.is-selected {
+  background: rgba(91, 147, 255, 0.16);
+  color: #93c5fd;
 }
 
 .quick-add-confirm__item-main {
@@ -590,6 +683,8 @@ body[data-theme='dark'] #app .quick-add-confirm__group .form-select:focus {
 .quick-add-confirm__footer {
   justify-content: flex-end;
   padding: 0 22px 22px;
+  position: relative;
+  z-index: 1;
 }
 
 .status-pill,

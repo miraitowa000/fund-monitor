@@ -45,13 +45,13 @@ import { createRefreshTimers } from './timers.js';
 
 const THEME_STORAGE_KEY = 'fundMonitorTheme';
 const RELEASE_NOTICE_STORAGE_KEY = 'fundMonitorReleaseNoticeSeen';
-const RELEASE_NOTICE_VERSION = 'release-2026-04-24-search-list-polish';
+const RELEASE_NOTICE_VERSION = 'release-2026-04-26-performance-search-groups';
 const RELEASE_NOTICE_TITLE = '更新说明';
 const RELEASE_NOTICE_ITEMS = [
-  { id: '1', text: '新增基金搜索，支持按代码或名称快速查找。' },
-  { id: '2', text: '支持一次选择多只基金并批量添加。' },
-  { id: '3', text: '优化基金列表展示，补充单位净值和估算净值。' },
-  { id: '4', text: '优化分组展示与切换交互。' }
+  { id: '1', text: '新增基金搜索与批量添加能力。' },
+  { id: '2', text: '优化基金列表、详情与分组展示交互。' },
+  { id: '3', text: '优化移动端页面布局与弹窗体验。' },
+  { id: '4', text: '优化页面加载与数据刷新稳定性。' }
 ];
 
 const { createApp, ref, onMounted, onUnmounted, computed, nextTick, watch } = window.Vue;
@@ -78,6 +78,7 @@ const app = createApp({
     const activeGroupId = ref('all');
     const funds = ref([]);
     const portfolioItems = ref([]);
+    const fundListVersion = ref(0);
     const portfolioSummary = ref({
       total_holding_amount: 0,
       total_daily_profit: 0,
@@ -131,6 +132,7 @@ const app = createApp({
     const quickAddSelection = ref([]);
     const quickAddConfirmOpen = ref(false);
     const quickAddGroupId = ref('');
+    const quickAddGroupMenuOpen = ref(false);
     const quickAddSaving = ref(false);
     const summaryExpanded = ref(true);
     const isMobileView = ref(false);
@@ -158,6 +160,7 @@ const app = createApp({
     let fundsRefreshPromise = null;
     let indexesRefreshPromise = null;
     let stickyPanelResizeObserver = null;
+    let portfolioRenderTimer = null;
 
     const parseNumber = (val) => {
       const n = parseFloat(val);
@@ -211,6 +214,17 @@ const app = createApp({
       await nextTick();
       renderPortfolioProfitChart(portfolioIntradayChartData.value);
       resizeDetailCharts();
+    };
+
+    const schedulePortfolioProfitRender = () => {
+      if (portfolioRenderTimer) {
+        clearTimeout(portfolioRenderTimer);
+        portfolioRenderTimer = null;
+      }
+      portfolioRenderTimer = setTimeout(() => {
+        portfolioRenderTimer = null;
+        renderPortfolioProfitVisuals();
+      }, 250);
     };
 
     const renderActiveHistoryChart = async () => {
@@ -376,7 +390,8 @@ const app = createApp({
       });
     });
 
-    const fundListRenderKey = computed(() => `${activeGroupId.value}-${sortedFunds.value.map((item) => item.code).join(',')}`);
+    // 大户场景下避免在 key 里拼接所有 code（会造成巨大字符串分配与 diff 压力）
+    const fundListRenderKey = computed(() => `${activeGroupId.value}-${sortDir.value}-${fundListVersion.value}`);
     const sortIcon = computed(() => getSortIcon(sortDir.value));
 
     const marketNowText = computed(() => {
@@ -448,7 +463,7 @@ const app = createApp({
     const portfolioSummaryCards = computed(() => ([
       {
         key: 'holding_amount',
-        label: activeGroupId.value === 'all' ? '总持仓市值' : '分组持仓市值',
+        label: '总持仓市值',
         value: formatCurrency(portfolioSummary.value.total_holding_amount),
         meta: '',
         valueClass: '',
@@ -490,7 +505,8 @@ const app = createApp({
 
     const portfolioIntradayChartData = computed(() => {
       const labels = TRADING_MINUTES.slice();
-      const positionItems = filteredFunds.value.filter((item) => item?.has_position);
+      const labelSet = new Set(labels);
+      const positionItems = portfolioItems.value.filter((item) => item?.has_position);
       if (positionItems.length === 0) {
         return {
           labels,
@@ -522,14 +538,14 @@ const app = createApp({
         Object.keys(cachedPoints).forEach((minute) => {
           const normalized = normalizeToStepMinute(minute);
           const nav = parseNumber(cachedPoints[minute]);
-          if (!normalized || !Number.isFinite(nav) || !labels.includes(normalized)) return;
+          if (!normalized || !Number.isFinite(nav) || !labelSet.has(normalized)) return;
           pointMap[normalized] = nav;
         });
 
         if (String(item.current_nav_source || '') === 'estimated') {
           const liveMinute = normalizeToStepMinute(toMinute(item.gztime) || nowMinute);
           const liveNav = parseNumber(item.current_nav);
-          if (liveMinute && Number.isFinite(liveNav) && labels.includes(liveMinute)) {
+          if (liveMinute && Number.isFinite(liveNav) && labelSet.has(liveMinute)) {
             pointMap[liveMinute] = liveNav;
           }
         }
@@ -591,6 +607,12 @@ const app = createApp({
     const selectedFundGroupName = computed(() => (
       fundMetaMap.value[currentFundCode.value]?.group_name || '全部'
     ));
+
+    const quickAddGroupLabel = computed(() => {
+      if (!quickAddGroupId.value) return '不分组';
+      const matchedGroup = fundGroups.value.find((group) => String(group.id) === String(quickAddGroupId.value));
+      return matchedGroup?.name || '不分组';
+    });
 
     const intradayDataTag = computed(() => {
       const basic = detailBasicView.value || {};
@@ -689,6 +711,7 @@ const app = createApp({
       funds.value = nextState.funds;
       portfolioItems.value = nextState.items;
       portfolioSummary.value = nextState.summary;
+      fundListVersion.value += 1;
       return nextState.items;
     };
 
@@ -802,7 +825,7 @@ const app = createApp({
           await renderDetailVisuals();
         }
 
-        await renderPortfolioProfitVisuals();
+        schedulePortfolioProfitRender();
       } finally {
         loading.value = false;
       }
@@ -1011,12 +1034,24 @@ const app = createApp({
     const openQuickAddConfirm = () => {
       if (quickAddSelection.value.length === 0) return;
       quickAddGroupId.value = activeGroupId.value !== 'all' ? String(activeGroupId.value) : '';
+      quickAddGroupMenuOpen.value = false;
       quickAddConfirmOpen.value = true;
       quickSearchOpen.value = false;
     };
 
     const closeQuickAddConfirm = () => {
+      quickAddGroupMenuOpen.value = false;
       quickAddConfirmOpen.value = false;
+    };
+
+    const toggleQuickAddGroupMenu = () => {
+      if (!quickAddConfirmOpen.value) return;
+      quickAddGroupMenuOpen.value = !quickAddGroupMenuOpen.value;
+    };
+
+    const selectQuickAddGroup = (groupId) => {
+      quickAddGroupId.value = groupId ? String(groupId) : '';
+      quickAddGroupMenuOpen.value = false;
     };
 
     const confirmQuickAddFunds = async () => {
@@ -1036,6 +1071,7 @@ const app = createApp({
         quickSearchInput.value = '';
         quickSearchResults.value = [];
         quickSearchOpen.value = false;
+        quickAddGroupMenuOpen.value = false;
         quickAddConfirmOpen.value = false;
         await fetchData();
       } finally {
@@ -1381,9 +1417,9 @@ const app = createApp({
     });
 
     watch(
-      () => [portfolioIntradayChartData.value, activeGroupId.value, theme.value],
+      () => [portfolioIntradayChartData.value, theme.value],
       () => {
-        renderPortfolioProfitVisuals();
+        schedulePortfolioProfitRender();
       }
     );
 
@@ -1391,6 +1427,10 @@ const app = createApp({
       timers.stop();
       stopClockTimer();
       clearQuickSearchTimer();
+      if (portfolioRenderTimer) {
+        clearTimeout(portfolioRenderTimer);
+        portfolioRenderTimer = null;
+      }
       disposeCharts();
       if (resizeHandler) {
         window.removeEventListener('resize', resizeHandler);
@@ -1476,11 +1516,13 @@ const app = createApp({
       quickSearchLoading,
       quickSearchError,
       quickSearchOpen,
-      quickAddSelection,
-      quickAddConfirmOpen,
-      quickAddGroupId,
-      quickAddSaving,
-      quickAddButtonText,
+        quickAddSelection,
+        quickAddConfirmOpen,
+        quickAddGroupId,
+        quickAddGroupMenuOpen,
+        quickAddGroupLabel,
+        quickAddSaving,
+        quickAddButtonText,
       summaryExpanded,
       isMobileView,
       deletingFund,
@@ -1519,10 +1561,12 @@ const app = createApp({
       handleQuickSearchFocus,
       focusQuickSearchFirst,
       toggleQuickAddSelection,
-      removeQuickAddSelection,
-      openQuickAddConfirm,
-      closeQuickAddConfirm,
-      confirmQuickAddFunds,
+        removeQuickAddSelection,
+        openQuickAddConfirm,
+        closeQuickAddConfirm,
+        toggleQuickAddGroupMenu,
+        selectQuickAddGroup,
+        confirmQuickAddFunds,
       openRenameGroupModal,
       closeRenameGroupModal,
       confirmRenameGroup,

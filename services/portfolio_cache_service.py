@@ -6,7 +6,10 @@ import time
 from core.redis_client import get_redis_client
 
 
-REDIS_PORTFOLIO_TTL_SECONDS = 8
+# 组合数据 fresh 窗口保持较短，保证页面收益数据更新频率
+REDIS_PORTFOLIO_TTL_SECONDS = 20
+# Redis 实体保留更久，用于 stale-while-revalidate，避免冷启动和高峰期反复现算
+REDIS_PORTFOLIO_STALE_TTL_SECONDS = 10 * 60
 
 
 def _normalize_client_id(client_id):
@@ -30,7 +33,7 @@ def set_user_portfolio(client_id, payload):
                 'ts': time.time(),
                 'value': payload,
             }, ensure_ascii=False),
-            ex=REDIS_PORTFOLIO_TTL_SECONDS,
+            ex=REDIS_PORTFOLIO_STALE_TTL_SECONDS,
         )
     except Exception:
         pass

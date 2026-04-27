@@ -172,6 +172,12 @@
 
   .page-top-search-panel__search {
     max-width: none;
+    position: relative;
+    z-index: 32;
+  }
+
+  .page-top-search-panel__head .page-top-search-panel__search {
+    z-index: 32;
   }
 
   .page-top-search-panel__head {
@@ -179,6 +185,7 @@
     grid-template-columns: 1fr;
     gap: 12px;
     justify-content: initial;
+    overflow: visible;
   }
 
   .page-top-search-panel__brand {
@@ -194,6 +201,12 @@
     flex-wrap: wrap;
     justify-content: flex-start;
     width: 100%;
+    position: relative;
+    z-index: 1;
+  }
+
+  .page-top-search-panel__head .page-top-search-panel__status {
+    z-index: 1;
   }
 
   .page-top-search-panel .theme-toggle-btn {
@@ -232,9 +245,14 @@
 
   .topbar-fund-search {
     order: initial;
+    position: relative;
+    z-index: 32;
   }
 
   .topbar-fund-search__shell {
+    --topbar-search-submit-width: 96px;
+    --topbar-search-shell-gap: 10px;
+    position: relative;
     grid-template-columns: minmax(0, 1fr) 96px;
     gap: 10px;
   }
@@ -244,6 +262,9 @@
     padding-left: 42px;
     padding-right: 16px;
     border-radius: 16px;
+    position: relative;
+    z-index: 33;
+    overflow: visible;
   }
 
   .topbar-fund-search__input {
@@ -262,26 +283,21 @@
     position: absolute;
     top: calc(100% + 8px);
     left: 0;
-    width: 100%;
+    width: calc(100% + var(--topbar-search-submit-width) + var(--topbar-search-shell-gap));
+    max-width: calc(100vw - 32px);
     margin-top: 8px;
     max-height: min(420px, 52vh);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 80;
   }
 
   .topbar-fund-search__input-wrap > .topbar-fund-search__dropdown {
-    display: none !important;
+    display: block !important;
   }
 
   .topbar-fund-search > .topbar-fund-search__dropdown {
-    display: block !important;
-    position: static;
-    width: 100%;
-    margin-top: 10px;
-    max-height: min(420px, 52vh);
-    z-index: auto;
-  }
-
-  .topbar-fund-search > .topbar-fund-search__dropdown .quick-add-option.disabled {
-    opacity: 1;
+    display: none !important;
   }
 
   .topbar-panel__status > * {
@@ -845,6 +861,8 @@
   }
 
   .topbar-fund-search__shell {
+    --topbar-search-submit-width: 98px;
+    --topbar-search-shell-gap: 8px;
     grid-template-columns: minmax(0, 1fr) 98px;
     gap: 8px;
   }
@@ -864,7 +882,8 @@
   .topbar-fund-search__dropdown {
     border-radius: 18px;
     padding: 6px;
-    width: 100%;
+    width: calc(100% + var(--topbar-search-submit-width) + var(--topbar-search-shell-gap));
+    max-width: calc(100vw - 24px);
     max-height: 50vh;
   }
 

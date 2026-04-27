@@ -1,5 +1,7 @@
+import threading
 from datetime import datetime
 
+from core.runtime import PORTFOLIO_REFRESH_EXECUTOR, PORTFOLIO_REFRESH_SEMAPHORE
 from core.perf_metrics import increment_metric
 from services.dashboard_cache_service import (
     get_dashboard_bootstrap as get_cached_dashboard_bootstrap,
@@ -7,7 +9,63 @@ from services.dashboard_cache_service import (
 )
 from services.index_service import get_indexes
 from services.user_fund_profit_service import get_user_portfolio
+from services.portfolio_cache_service import (
+    get_stale_user_portfolio,
+    get_user_portfolio as get_cached_user_portfolio,
+)
 from services.user_fund_service import bootstrap_user_funds, get_user_snapshot
+
+
+_PORTFOLIO_REFRESH_INFLIGHT = set()
+_PORTFOLIO_REFRESH_LOCK = threading.Lock()
+
+
+def _refresh_portfolio_in_background(client_id, user_funds):
+    try:
+        get_user_portfolio(client_id, force_refresh=True, user_funds=user_funds)
+    except Exception:
+        increment_metric('cache.portfolio.bootstrap_bg_refresh_error')
+    finally:
+        try:
+            PORTFOLIO_REFRESH_SEMAPHORE.release()
+        except Exception:
+            pass
+        with _PORTFOLIO_REFRESH_LOCK:
+            _PORTFOLIO_REFRESH_INFLIGHT.discard(str(client_id or '').strip())
+
+
+def _schedule_portfolio_refresh(client_id, user_funds):
+    normalized_client_id = str(client_id or '').strip()
+    if not normalized_client_id:
+        return False
+
+    with _PORTFOLIO_REFRESH_LOCK:
+        if normalized_client_id in _PORTFOLIO_REFRESH_INFLIGHT:
+            increment_metric('cache.portfolio.bootstrap_bg_refresh_reuse')
+            return False
+        _PORTFOLIO_REFRESH_INFLIGHT.add(normalized_client_id)
+
+    if not PORTFOLIO_REFRESH_SEMAPHORE.acquire(blocking=False):
+        increment_metric('cache.portfolio.bootstrap_bg_refresh_throttled')
+        with _PORTFOLIO_REFRESH_LOCK:
+            _PORTFOLIO_REFRESH_INFLIGHT.discard(normalized_client_id)
+        return False
+
+    try:
+        PORTFOLIO_REFRESH_EXECUTOR.submit(
+            _refresh_portfolio_in_background,
+            normalized_client_id,
+            user_funds,
+        )
+    except Exception:
+        PORTFOLIO_REFRESH_SEMAPHORE.release()
+        with _PORTFOLIO_REFRESH_LOCK:
+            _PORTFOLIO_REFRESH_INFLIGHT.discard(normalized_client_id)
+        increment_metric('cache.portfolio.bootstrap_bg_refresh_submit_error')
+        return False
+
+    increment_metric('cache.portfolio.bootstrap_bg_refresh_submit')
+    return True
 
 
 def get_dashboard_bootstrap(client_id, legacy_codes=None):
@@ -34,13 +92,35 @@ def get_dashboard_bootstrap(client_id, legacy_codes=None):
         snapshot = get_user_snapshot(client_id, force_refresh=True)
         bootstrapped_legacy = True
 
+    user_funds = snapshot.get('funds') or []
+    portfolio_stale = False
+    portfolio = get_cached_user_portfolio(client_id)
+    if portfolio:
+        increment_metric('cache.portfolio.bootstrap_hit')
+    else:
+        increment_metric('cache.portfolio.bootstrap_miss')
+        stale_portfolio = get_stale_user_portfolio(client_id)
+        if stale_portfolio:
+            increment_metric('cache.portfolio.bootstrap_stale_hit')
+            portfolio = stale_portfolio
+            portfolio_stale = True
+            _schedule_portfolio_refresh(client_id, user_funds)
+        else:
+            increment_metric('cache.portfolio.bootstrap_sync_refresh')
+            portfolio = get_user_portfolio(client_id, force_refresh=True, user_funds=user_funds, request_timeout=6)
+
     payload = {
         'success': True,
         'snapshot': snapshot,
-        'portfolio': get_user_portfolio(client_id, user_funds=snapshot.get('funds') or []),
+        'portfolio': portfolio,
         'indexes': get_indexes(),
         'bootstrapped_legacy': bootstrapped_legacy,
+        'portfolio_stale': portfolio_stale,
         'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-    set_dashboard_bootstrap(client_id, payload)
+
+    if portfolio_stale:
+        increment_metric('cache.dashboard.skip_set_stale_portfolio')
+    else:
+        set_dashboard_bootstrap(client_id, payload)
     return payload

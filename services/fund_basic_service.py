@@ -611,20 +611,28 @@ def fetch_funds_parallel(codes, request_timeout=15):
         else:
             to_fetch.append(code)
     if to_fetch:
-        future_to_code = {submit_basic_refresh(code, FUNDS_EXECUTOR): code for code in to_fetch}
-        done, not_done = futures_wait(future_to_code.keys(), timeout=request_timeout)
-        for future in done:
-            code = future_to_code[future]
-            try:
-                result = future.result()
-                if result:
-                    results_map[code] = result
-            except Exception:
-                pass
-        for future in not_done:
-            code = future_to_code[future]
-            stale = cache_get_stale('basic', code)
-            results_map[code] = stale if _should_use_stale_basic(stale) else build_timeout_placeholder(code)
+        # 分批提交，避免单次关注基金数过大时线程池排队和长时间阻塞
+        chunk_size = 50
+        deadline = time.time() + max(float(request_timeout or 0), 0.1)
+        for offset in range(0, len(to_fetch), chunk_size):
+            chunk = to_fetch[offset: offset + chunk_size]
+            remaining = max(deadline - time.time(), 0.0)
+            if remaining <= 0:
+                remaining = 0.01
+            future_to_code = {submit_basic_refresh(code, FUNDS_EXECUTOR): code for code in chunk}
+            done, not_done = futures_wait(future_to_code.keys(), timeout=remaining)
+            for future in done:
+                code = future_to_code[future]
+                try:
+                    result = future.result()
+                    if result:
+                        results_map[code] = result
+                except Exception:
+                    pass
+            for future in not_done:
+                code = future_to_code[future]
+                stale = cache_get_stale('basic', code)
+                results_map[code] = stale if _should_use_stale_basic(stale) else build_timeout_placeholder(code)
     return [results_map.get(code) for code in norm_codes]
 
 

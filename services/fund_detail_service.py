@@ -1,6 +1,7 @@
 import re
 import threading
 import time
+from concurrent.futures import TimeoutError
 from datetime import datetime, timedelta
 
 from bs4 import BeautifulSoup
@@ -8,7 +9,7 @@ from bs4 import BeautifulSoup
 from core.cache import cache_get, cache_get_stale, cache_set
 from core.http import http_get
 from core.perf_metrics import increment_metric
-from core.runtime import DETAIL_EXECUTOR, register_watched_codes
+from core.runtime import DETAIL_EXECUTOR, DETAIL_PART_EXECUTOR, register_watched_codes
 from services.history_cache_service import (
     acquire_history_refresh_lock,
     get_fund_history as get_cached_fund_history,
@@ -51,6 +52,8 @@ DETAIL_WAIT_STEP_SECONDS = 0.1
 HISTORY_REFRESH_LOCK_SECONDS = 10
 HISTORY_WAIT_FOR_REMOTE_REFRESH_SECONDS = 3
 HISTORY_WAIT_STEP_SECONDS = 0.1
+DETAIL_PART_TIMEOUT_SECONDS = 6
+DETAIL_RESULT_TIMEOUT_SECONDS = 8
 
 
 def _clean_name(name):
@@ -508,10 +511,18 @@ def _build_fund_details(code):
             return res
         return cache_get_stale('history', history_cache_key) or res
 
-    holdings_future = DETAIL_EXECUTOR.submit(load_holdings)
-    history_future = DETAIL_EXECUTOR.submit(load_history)
-    holdings = holdings_future.result()
-    history = history_future.result()
+    holdings_future = DETAIL_PART_EXECUTOR.submit(load_holdings)
+    history_future = DETAIL_PART_EXECUTOR.submit(load_history)
+    try:
+        holdings = holdings_future.result(timeout=DETAIL_PART_TIMEOUT_SECONDS)
+    except TimeoutError:
+        increment_metric('detail.holdings.timeout')
+        holdings = cache_get_stale('holdings', code) or {'success': False, 'holdings': []}
+    try:
+        history = history_future.result(timeout=DETAIL_PART_TIMEOUT_SECONDS)
+    except TimeoutError:
+        increment_metric('detail.history.timeout')
+        history = cache_get_stale('history', f'{code}:30') or {'success': False, 'data': []}
     result = {
         'basic': basic if basic else {'success': False},
         'holdings': holdings if holdings else {'success': False, 'holdings': []},
@@ -579,9 +590,11 @@ def get_fund_details(fund_code):
             future.add_done_callback(_cleanup)
 
     try:
-        result = future.result()
+        result = future.result(timeout=DETAIL_RESULT_TIMEOUT_SECONDS)
         if result:
             return result
+    except TimeoutError:
+        increment_metric('cache.detail.result_timeout')
     except Exception:
         pass
 

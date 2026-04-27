@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -5,9 +6,24 @@ from concurrent.futures import ThreadPoolExecutor
 from core.redis_client import get_redis_client
 
 
-FUNDS_EXECUTOR = ThreadPoolExecutor(max_workers=20)
-BG_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=6)
-DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+def _env_int(name, default):
+    try:
+        return int(str(os.getenv(name, default)).strip())
+    except Exception:
+        return int(default)
+
+
+FUNDS_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _env_int('FUNDS_MAX_WORKERS', 20)))
+BG_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _env_int('BG_REFRESH_MAX_WORKERS', 6)))
+PORTFOLIO_REFRESH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, _env_int('PORTFOLIO_REFRESH_MAX_WORKERS', 2))
+)
+# 详情接口涉及 holdings/history 网络与解析，2 线程在多人/多详情场景下容易排队
+DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _env_int('DETAIL_MAX_WORKERS', 4)))
+DETAIL_PART_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, _env_int('DETAIL_PART_MAX_WORKERS', 4)))
+PORTFOLIO_REFRESH_SEMAPHORE = threading.Semaphore(
+    max(1, _env_int('PORTFOLIO_REFRESH_MAX_CONCURRENCY', 2))
+)
 
 WATCHED_CODE_TTL_SECONDS = 6 * 60 * 60
 WATCHED_CODES_REDIS_KEY = 'runtime:watched_codes'

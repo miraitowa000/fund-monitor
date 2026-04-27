@@ -20,6 +20,10 @@ services:
       - "8065:5000"
     depends_on:
       - redis
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5)"]
       interval: 30s
@@ -41,3 +45,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     depends_on:
       - redis
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535

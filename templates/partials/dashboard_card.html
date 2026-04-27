@@ -63,34 +63,6 @@
               [[ quickAddButtonText ]]
             </button>
           </div>
-
-          <div v-if="quickSearchOpen" class="topbar-fund-search__dropdown">
-            <div v-if="quickSearchLoading" class="quick-add-dropdown__state">搜索中...</div>
-            <div v-else-if="quickSearchError" class="quick-add-dropdown__state danger">[[ quickSearchError ]]</div>
-            <div v-else-if="quickSearchResultsView.length === 0" class="quick-add-dropdown__state">没有匹配的基金</div>
-            <div v-else>
-              <button
-                v-for="item in quickSearchResultsView"
-                :key="item.code"
-                type="button"
-                class="quick-add-option topbar-fund-search__option"
-                :class="{ disabled: item.isExisting }"
-                @click="toggleQuickAddSelection(item)"
-              >
-                <div class="quick-add-option__main">
-                  <strong>[[ item.name ]]</strong>
-                  <span>[[ item.code ]]</span>
-                </div>
-                <div
-                  class="topbar-fund-search__check"
-                  :class="{
-                    'is-selected': item.isSelected,
-                    'is-existing': item.isExisting
-                  }"
-                ></div>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -691,12 +663,42 @@
           </div>
         </div>
 
-        <div class="quick-add-confirm__group">
+        <div class="quick-add-confirm__group" @click.stop>
           <label class="form-label small text-muted">选择分组</label>
-          <select class="form-select" v-model="quickAddGroupId">
-            <option value="">不分组</option>
-            <option v-for="group in fundGroups" :key="group.id" :value="String(group.id)">[[ group.name ]]</option>
-          </select>
+          <div class="quick-add-confirm__group-picker">
+            <button
+              type="button"
+              class="quick-add-confirm__group-trigger"
+              :class="{ 'is-open': quickAddGroupMenuOpen }"
+              @click="toggleQuickAddGroupMenu"
+            >
+              <span>[[ quickAddGroupLabel ]]</span>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M5 7.5 10 12.5 15 7.5"></path>
+              </svg>
+            </button>
+
+            <div v-if="quickAddGroupMenuOpen" class="quick-add-confirm__group-menu">
+              <button
+                type="button"
+                class="quick-add-confirm__group-option"
+                :class="{ 'is-selected': !quickAddGroupId }"
+                @click="selectQuickAddGroup('')"
+              >
+                不分组
+              </button>
+              <button
+                v-for="group in fundGroups"
+                :key="group.id"
+                type="button"
+                class="quick-add-confirm__group-option"
+                :class="{ 'is-selected': String(quickAddGroupId) === String(group.id) }"
+                @click="selectQuickAddGroup(String(group.id))"
+              >
+                [[ group.name ]]
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="quick-add-confirm__footer">
