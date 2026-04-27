@@ -1,10 +1,9 @@
 import {
-  bootstrapUserFunds,
   createFundGroup,
   deleteFundGroup,
   deleteUserFund,
+  fetchDashboardBootstrap,
   fetchPortfolio,
-  fetchFundsRaw,
   fetchIndexesRaw,
   fetchUserFundsMeta,
   loadFundHistory,
@@ -29,6 +28,7 @@ import {
   readIntradayCache,
   toMinute,
 } from './cache.js';
+import { buildPortfolioViewState } from './dashboard-state.js';
 import { createDetailController } from './detail-modal.js';
 import {
   EMPTY_DETAIL,
@@ -99,6 +99,9 @@ const app = createApp({
     const currentFundCode = ref('');
     const currentFundName = ref('');
     const renameGroupName = ref('');
+    const editingGroupId = ref('');
+    const editingGroupName = ref('');
+    const mobileGroupActionsId = ref('');
     const editingFundCode = ref('');
     const groupActionError = ref('');
     const deletingGroup = ref(false);
@@ -151,6 +154,10 @@ const app = createApp({
     let latestHistoryRequestId = 0;
     let quickSearchTimer = null;
     let outsideClickHandler = null;
+    let visibilityChangeHandler = null;
+    let fundsRefreshPromise = null;
+    let indexesRefreshPromise = null;
+    let stickyPanelResizeObserver = null;
 
     const parseNumber = (val) => {
       const n = parseFloat(val);
@@ -213,6 +220,27 @@ const app = createApp({
     };
 
     const isMobileViewport = () => window.matchMedia('(max-width: 860px)').matches;
+
+    const updateDesktopStickyOffsets = () => {
+      const appEl = document.getElementById('app');
+      const topSearchPanel = appEl?.querySelector('[data-sticky-panel="top-search"]');
+      if (!appEl || !topSearchPanel) return;
+      const panelHeight = Math.ceil(topSearchPanel.getBoundingClientRect().height || 0);
+      appEl.style.setProperty('--page-top-search-panel-height', `${panelHeight}px`);
+    };
+
+    const bindStickyPanelObserver = () => {
+      const appEl = document.getElementById('app');
+      const topSearchPanel = appEl?.querySelector('[data-sticky-panel="top-search"]');
+      if (!topSearchPanel) return;
+      updateDesktopStickyOffsets();
+      if (typeof ResizeObserver === 'undefined') return;
+      stickyPanelResizeObserver?.disconnect();
+      stickyPanelResizeObserver = new ResizeObserver(() => {
+        updateDesktopStickyOffsets();
+      });
+      stickyPanelResizeObserver.observe(topSearchPanel);
+    };
 
     const syncBodyDetailState = (open) => {
       document.body.classList.toggle('detail-modal-open', Boolean(open));
@@ -359,6 +387,9 @@ const app = createApp({
     });
 
     const marketStatus = computed(() => getMarketStatus(now.value));
+
+    const isPageVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible';
+    const isTradingSessionOpen = () => marketStatus.value.className === 'market-open';
 
     const mobileTickerIndexes = computed(() => {
       if (!Array.isArray(indexes.value) || indexes.value.length === 0) return [];
@@ -643,74 +674,103 @@ const app = createApp({
       else sortDir.value = 'none';
     };
 
-    const loadUserState = async () => {
-      let snapshot = await fetchUserFundsMeta(clientId);
-      const legacyCodes = loadSavedCodes();
-
-      if ((!snapshot.initialized && (!snapshot.funds || snapshot.funds.length === 0)) && legacyCodes.length > 0) {
-        await bootstrapUserFunds(clientId, legacyCodes);
-        clearSavedCodes();
-        snapshot = await fetchUserFundsMeta(clientId);
-      }
-
+    const refreshSnapshot = async () => {
+      const snapshot = await fetchUserFundsMeta(clientId);
       syncSnapshot(snapshot);
       return snapshot;
     };
 
-    const attachGroupMeta = (quoteList) => quoteList.map((item) => ({
-      ...item,
-      group_id: fundMetaMap.value[item.code]?.group_id || null,
-      group_name: fundMetaMap.value[item.code]?.group_name || ''
-    }));
+    const applyPortfolioPayload = (portfolio) => {
+      const nextState = buildPortfolioViewState(
+        portfolio,
+        fundMetaMap.value,
+        portfolioSummary.value
+      );
+      funds.value = nextState.funds;
+      portfolioItems.value = nextState.items;
+      portfolioSummary.value = nextState.summary;
+      return nextState.items;
+    };
 
-    const normalizePortfolioItems = (items) => (
-      Array.isArray(items) ? items.map((item) => ({
-        ...item,
-        nav_confirmed: item.current_nav_source === 'confirmed',
-        confirmed_nav: item.current_nav_source === 'confirmed' ? item.current_nav : '',
-        confirmed_change: item.current_nav_source === 'confirmed' ? item.daily_change_pct : '',
-        gsz: item.current_nav_source === 'estimated' ? item.current_nav : '',
-        gszzl: item.current_nav_source === 'estimated' ? item.daily_change_pct : '',
-        gztime: item.current_nav_source === 'estimated' ? item.current_nav_date : '',
-        jzrq: item.current_nav_source === 'confirmed' ? item.current_nav_date : '',
-        dwjz: item.previous_nav ?? '',
-      })) : []
-    );
+    const applyBootstrapPayload = (payload) => {
+      const snapshot = payload?.snapshot || {};
+      const portfolio = payload?.portfolio || {};
 
-    const fetchFunds = async () => {
-      loading.value = true;
+      syncSnapshot(snapshot);
+      const normalizedItems = applyPortfolioPayload(portfolio);
+      indexes.value = Array.isArray(payload?.indexes) ? payload.indexes : [];
+
+      if (payload?.bootstrapped_legacy) {
+        clearSavedCodes();
+      }
+
+      return normalizedItems;
+    };
+
+    const fetchFunds = async (options = {}) => {
+      const { force = false, silent = false } = options;
+      if (!force && (!isPageVisible() || !isTradingSessionOpen() || savedCodes.value.length === 0)) {
+        return;
+      }
+      if (fundsRefreshPromise) {
+        return fundsRefreshPromise;
+      }
+
+      const task = (async () => {
+        if (!silent) {
+          loading.value = true;
+        }
+        try {
+          applyPortfolioPayload(await fetchPortfolio(clientId));
+          lastUpdateTime.value = new Date().toLocaleTimeString();
+          await renderPortfolioProfitVisuals();
+        } catch (error) {
+          console.error('刷新组合数据失败:', error);
+        } finally {
+          if (!silent) {
+            loading.value = false;
+          }
+        }
+      })();
+
+      fundsRefreshPromise = task;
       try {
-        const [quoteList, portfolio] = await Promise.all([
-          fetchFundsRaw(savedCodes.value),
-          fetchPortfolio(clientId)
-        ]);
-        funds.value = attachGroupMeta(quoteList);
-        portfolioItems.value = normalizePortfolioItems(portfolio?.items);
-        portfolioSummary.value = portfolio?.summary || portfolioSummary.value;
-        lastUpdateTime.value = new Date().toLocaleTimeString();
-        await renderPortfolioProfitVisuals();
+        return await task;
       } finally {
-        loading.value = false;
+        if (fundsRefreshPromise === task) {
+          fundsRefreshPromise = null;
+        }
       }
     };
 
-    const fetchIndexes = async () => {
-      indexes.value = await fetchIndexesRaw();
+    const fetchIndexes = async (options = {}) => {
+      const { force = false } = options;
+      if (!force && (!isPageVisible() || !isTradingSessionOpen())) {
+        return;
+      }
+      if (indexesRefreshPromise) {
+        return indexesRefreshPromise;
+      }
+
+      const task = (async () => {
+        indexes.value = await fetchIndexesRaw();
+      })();
+
+      indexesRefreshPromise = task;
+      try {
+        return await task;
+      } finally {
+        if (indexesRefreshPromise === task) {
+          indexesRefreshPromise = null;
+        }
+      }
     };
 
     const fetchData = async () => {
       loading.value = true;
       try {
-        await loadUserState();
-        const [quoteList, idxRes, portfolio] = await Promise.all([
-          fetchFundsRaw(savedCodes.value),
-          fetchIndexesRaw(),
-          fetchPortfolio(clientId)
-        ]);
-        funds.value = attachGroupMeta(quoteList);
-        indexes.value = idxRes;
-        portfolioItems.value = normalizePortfolioItems(portfolio?.items);
-        portfolioSummary.value = portfolio?.summary || portfolioSummary.value;
+        const legacyCodes = loadSavedCodes();
+        const quoteList = applyBootstrapPayload(await fetchDashboardBootstrap(clientId, legacyCodes));
         lastUpdateTime.value = new Date().toLocaleTimeString();
 
         if (currentFundCode.value) {
@@ -851,11 +911,16 @@ const app = createApp({
 
       newGroupName.value = '';
       addingGroupInline.value = false;
-      await loadUserState();
+      mobileGroupActionsId.value = '';
+      await refreshSnapshot();
       selectedGroupId.value = String(result.id);
     };
 
     const openInlineGroupCreate = async () => {
+      editingGroupId.value = '';
+      editingGroupName.value = '';
+      mobileGroupActionsId.value = '';
+      groupActionError.value = '';
       addingGroupInline.value = true;
       await nextTick();
       const input = document.getElementById('inlineGroupNameInput');
@@ -865,6 +930,7 @@ const app = createApp({
     const closeInlineGroupCreate = () => {
       addingGroupInline.value = false;
       newGroupName.value = '';
+      mobileGroupActionsId.value = '';
     };
 
     const clearQuickSearchTimer = () => {
@@ -923,7 +989,7 @@ const app = createApp({
     };
 
     const toggleQuickAddSelection = (item) => {
-      if (!item || !item.code || savedCodes.value.includes(item.code)) return;
+      if (!item || !item.code) return;
       const idx = quickAddSelection.value.findIndex((selected) => selected.code === item.code);
       if (idx >= 0) {
         quickAddSelection.value.splice(idx, 1);
@@ -984,14 +1050,19 @@ const app = createApp({
 
     const handleGroupTabClick = async (group) => {
       if (!group) return;
-      if (
-        isMobileView.value
-        && String(activeGroupId.value) === String(group.id)
-        && String(group.id) !== 'all'
-      ) {
-        openRenameGroupModal();
+      const groupId = String(group.id);
+      if (String(activeGroupId.value) === groupId && !editingGroupId.value) {
+        if (isMobileView.value) {
+          mobileGroupActionsId.value = groupId !== 'all' ? groupId : '';
+        }
         return;
       }
+      if (String(activeGroupId.value) !== groupId) {
+        editingGroupId.value = '';
+        editingGroupName.value = '';
+        groupActionError.value = '';
+      }
+      mobileGroupActionsId.value = isMobileView.value && groupId !== 'all' ? groupId : '';
       await switchGroup(group.id);
     };
 
@@ -1021,10 +1092,7 @@ const app = createApp({
 
     const openRenameGroupModal = () => {
       if (!activeGroup.value || activeGroup.value.is_default) return;
-      ensureGroupModals();
-      renameGroupName.value = activeGroup.value.name;
-      groupActionError.value = '';
-      renameGroupModal?.show();
+      startInlineGroupEdit(activeGroup.value);
     };
 
     const closeRenameGroupModal = () => {
@@ -1033,23 +1101,7 @@ const app = createApp({
     };
 
     const confirmRenameGroup = async () => {
-      if (!activeGroup.value || activeGroup.value.is_default) return;
-      const nextName = renameGroupName.value.trim();
-      if (!nextName) {
-        groupActionError.value = '分组名称不能为空';
-        return;
-      }
-      renamingGroup.value = true;
-      groupActionError.value = '';
-      const result = await renameFundGroup(clientId, activeGroup.value.id, nextName);
-      if (result.error) {
-        groupActionError.value = result.error;
-        renamingGroup.value = false;
-        return;
-      }
-      renamingGroup.value = false;
-      closeRenameGroupModal();
-      await fetchData();
+      await submitInlineGroupEdit();
     };
 
     const openDeleteGroupModal = () => {
@@ -1076,7 +1128,53 @@ const app = createApp({
       }
       deletingGroup.value = false;
       closeDeleteGroupModal();
+      editingGroupId.value = '';
+      editingGroupName.value = '';
+      mobileGroupActionsId.value = '';
       activeGroupId.value = 'all';
+      await fetchData();
+    };
+
+    const startInlineGroupEdit = async (group) => {
+      if (!group || group.id === 'all' || group.is_default) return;
+      addingGroupInline.value = false;
+      editingGroupId.value = String(group.id);
+      editingGroupName.value = String(group.name || '');
+      mobileGroupActionsId.value = String(group.id);
+      groupActionError.value = '';
+      await nextTick();
+      const input = document.getElementById(`inlineGroupEditInput-${group.id}`);
+      input?.focus();
+      input?.select?.();
+    };
+
+    const cancelInlineGroupEdit = () => {
+      editingGroupId.value = '';
+      editingGroupName.value = '';
+      groupActionError.value = '';
+      if (!isMobileView.value) return;
+      mobileGroupActionsId.value = '';
+    };
+
+    const submitInlineGroupEdit = async () => {
+      if (!editingGroupId.value) return;
+      const nextName = editingGroupName.value.trim();
+      if (!nextName) {
+        groupActionError.value = '分组名称不能为空';
+        return;
+      }
+      renamingGroup.value = true;
+      groupActionError.value = '';
+      const result = await renameFundGroup(clientId, editingGroupId.value, nextName);
+      if (result.error) {
+        groupActionError.value = result.error;
+        renamingGroup.value = false;
+        return;
+      }
+      renamingGroup.value = false;
+      editingGroupId.value = '';
+      editingGroupName.value = '';
+      mobileGroupActionsId.value = '';
       await fetchData();
     };
 
@@ -1218,7 +1316,10 @@ const app = createApp({
       }
     };
 
-    const timers = createRefreshTimers({ fetchFunds, fetchIndexes });
+    const timers = createRefreshTimers({
+      fetchFunds: () => fetchFunds({ silent: true }),
+      fetchIndexes: () => fetchIndexes({ silent: true })
+    });
 
     const startClockTimer = () => {
       if (clockTimer) clearInterval(clockTimer);
@@ -1239,6 +1340,7 @@ const app = createApp({
       nextTick(() => {
         ensureGroupModals();
         bindModalLazyImages();
+        bindStickyPanelObserver();
       });
       startClockTimer();
       timers.start();
@@ -1249,13 +1351,27 @@ const app = createApp({
         if (!target.closest('.topbar-fund-search')) {
           quickSearchOpen.value = false;
         }
+        if (!target.closest('.group-panel') && !editingGroupId.value) {
+          mobileGroupActionsId.value = '';
+        }
       };
       document.addEventListener('click', outsideClickHandler);
+      visibilityChangeHandler = () => {
+        if (!isPageVisible()) return;
+        fetchFunds({ silent: true });
+        fetchIndexes({ silent: true });
+      };
+      document.addEventListener('visibilitychange', visibilityChangeHandler);
       resizeHandler = () => {
         isMobileView.value = isMobileViewport();
         if (!isMobileView.value) {
           summaryExpanded.value = true;
+          editingGroupId.value = '';
+          editingGroupName.value = '';
+          mobileGroupActionsId.value = '';
+          groupActionError.value = '';
         }
+        updateDesktopStickyOffsets();
         resizeDetailCharts();
         if (!isMobileViewport()) {
           closeMobileDetail();
@@ -1284,12 +1400,26 @@ const app = createApp({
         document.removeEventListener('click', outsideClickHandler);
         outsideClickHandler = null;
       }
+      if (visibilityChangeHandler) {
+        document.removeEventListener('visibilitychange', visibilityChangeHandler);
+        visibilityChangeHandler = null;
+      }
+      stickyPanelResizeObserver?.disconnect();
+      stickyPanelResizeObserver = null;
       syncBodyDetailState(false);
     });
 
     watch(quickSearchInput, (value) => {
       scheduleQuickSearch(value);
     });
+
+    watch(
+      () => quickAddSelection.value.length,
+      async () => {
+        await nextTick();
+        updateDesktopStickyOffsets();
+      }
+    );
 
     return {
       codeInput,
@@ -1319,6 +1449,9 @@ const app = createApp({
       currentFundCode,
       currentFundName,
       renameGroupName,
+      editingGroupId,
+      editingGroupName,
+      mobileGroupActionsId,
       editingFundCode,
       groupActionError,
       deletingGroup,
@@ -1380,6 +1513,9 @@ const app = createApp({
       addGroup,
       openInlineGroupCreate,
       closeInlineGroupCreate,
+      startInlineGroupEdit,
+      cancelInlineGroupEdit,
+      submitInlineGroupEdit,
       handleQuickSearchFocus,
       focusQuickSearchFirst,
       toggleQuickAddSelection,

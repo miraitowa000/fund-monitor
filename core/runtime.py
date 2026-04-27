@@ -2,12 +2,15 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from core.redis_client import get_redis_client
+
 
 FUNDS_EXECUTOR = ThreadPoolExecutor(max_workers=20)
 BG_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=6)
 DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 WATCHED_CODE_TTL_SECONDS = 6 * 60 * 60
+WATCHED_CODES_REDIS_KEY = 'runtime:watched_codes'
 
 _WATCHED_CODES = {}
 _WATCHED_CODES_LOCK = threading.Lock()
@@ -15,16 +18,68 @@ _INFLIGHT_BASIC = {}
 _INFLIGHT_BASIC_LOCK = threading.Lock()
 
 
+def _write_watched_codes_to_redis(entries):
+    if not entries:
+        return
+    try:
+        client = get_redis_client()
+        payload = {code: str(ts) for code, ts in entries.items()}
+        if payload:
+            client.hset(WATCHED_CODES_REDIS_KEY, mapping=payload)
+    except Exception:
+        pass
+
+
+def _read_watched_codes_from_redis():
+    try:
+        client = get_redis_client()
+        values = client.hgetall(WATCHED_CODES_REDIS_KEY) or {}
+    except Exception:
+        return {}
+
+    records = {}
+    for code, ts in values.items():
+        try:
+            records[str(code).zfill(6)] = float(ts)
+        except (TypeError, ValueError):
+            continue
+    return records
+
+
+def _prune_watched_codes_in_redis(cutoff):
+    try:
+        client = get_redis_client()
+        values = client.hgetall(WATCHED_CODES_REDIS_KEY) or {}
+        stale_codes = []
+        for code, ts in values.items():
+            try:
+                if float(ts) < cutoff:
+                    stale_codes.append(code)
+            except (TypeError, ValueError):
+                stale_codes.append(code)
+        if stale_codes:
+            client.hdel(WATCHED_CODES_REDIS_KEY, *stale_codes)
+        return len(stale_codes)
+    except Exception:
+        return 0
+
+
 def register_watched_codes(codes):
     now = time.time()
+    updated = {}
     with _WATCHED_CODES_LOCK:
         for code in codes:
-            _WATCHED_CODES[str(code).zfill(6)] = now
+            norm_code = str(code).zfill(6)
+            _WATCHED_CODES[norm_code] = now
+            updated[norm_code] = now
+    _write_watched_codes_to_redis(updated)
 
 
 def get_watched_codes():
+    merged = _read_watched_codes_from_redis()
     with _WATCHED_CODES_LOCK:
-        return list(_WATCHED_CODES.keys())
+        merged.update(_WATCHED_CODES)
+    return list(merged.keys())
 
 
 def prune_watched_codes(max_age_seconds=WATCHED_CODE_TTL_SECONDS):
@@ -35,6 +90,7 @@ def prune_watched_codes(max_age_seconds=WATCHED_CODE_TTL_SECONDS):
         for code in stale_codes:
             _WATCHED_CODES.pop(code, None)
             removed += 1
+    removed += _prune_watched_codes_in_redis(cutoff)
     return removed
 
 

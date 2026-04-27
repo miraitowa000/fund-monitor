@@ -2,12 +2,21 @@ import json
 import re
 import threading
 import time
-from concurrent.futures import wait as futures_wait
+from concurrent.futures import Future, wait as futures_wait
 from datetime import datetime
+from functools import lru_cache
 
 from core.cache import cache_get, cache_get_age, cache_get_stale, cache_prune, cache_set
 from core.http import http_get
+from core.perf_metrics import increment_metric
 from core.runtime import BG_REFRESH_EXECUTOR, FUNDS_EXECUTOR, get_inflight_basic, get_watched_codes, prune_watched_codes, set_inflight_basic
+from services.quote_cache_service import (
+    acquire_basic_quote_refresh_lock,
+    get_basic_quote,
+    get_stale_basic_quote,
+    release_basic_quote_refresh_lock,
+    set_basic_quote,
+)
 
 try:
     import akshare as ak
@@ -22,6 +31,9 @@ TTL_DETAIL_SECONDS = 60
 TTL_PINGZHONG_SECONDS = 180
 TTL_RELATED_ETF_SECONDS = 1800
 DETAIL_REQUEST_TIMEOUT_SECONDS = 6
+BASIC_REFRESH_LOCK_SECONDS = 8
+BASIC_WAIT_FOR_REMOTE_REFRESH_SECONDS = 2.5
+BASIC_WAIT_STEP_SECONDS = 0.1
 
 LINK_ETF_MANUAL_MAP = {
     '015283': ('513580', '华安恒生科技(QDII-ETF)'),
@@ -105,11 +117,20 @@ def get_cached_fund_list():
             df = df.copy()
             df[code_col] = df[code_col].astype(str).str.zfill(6)
             df['clean_name'] = df[name_col].astype(str).map(_clean_name)
+            search_rows = [
+                {
+                    'code': str(row.get(code_col, '') or '').zfill(6),
+                    'name': str(row.get(name_col, '') or '').strip(),
+                    'clean_name': str(row.get('clean_name', '') or '').lower(),
+                }
+                for row in df[[code_col, name_col, 'clean_name']].to_dict('records')
+            ]
             _FUND_LIST_CACHE = {
                 'df': df,
                 'code_col': code_col,
                 'name_col': name_col,
                 'name_map': dict(zip(df[code_col], df[name_col].astype(str))),
+                'search_rows': [row for row in search_rows if row['code'] and row['name']],
             }
             return _FUND_LIST_CACHE
         except Exception:
@@ -124,6 +145,45 @@ def get_fund_name_by_code(fund_code):
         return str(cache.get('name_map', {}).get(str(fund_code).zfill(6), ''))
     except Exception:
         return ''
+
+
+@lru_cache(maxsize=256)
+def _search_funds_cached(normalized_query, max_items):
+    cache = get_cached_fund_list()
+    if not cache:
+        return []
+
+    search_rows = cache.get('search_rows') or []
+    records = []
+    for row in search_rows:
+        code = row['code']
+        name = row['name']
+        clean_name = row['clean_name']
+
+        score = None
+        if code == normalized_query:
+            score = 0
+        elif code.startswith(normalized_query):
+            score = 1
+        elif normalized_query in clean_name:
+            score = 2
+        elif normalized_query in name.lower():
+            score = 3
+
+        if score is None:
+            continue
+
+        records.append({
+            'code': code,
+            'name': name,
+            'match_score': score,
+        })
+
+    records.sort(key=lambda item: (item['match_score'], len(item['code']), item['code']))
+    return [
+        {'code': item['code'], 'name': item['name']}
+        for item in records[:max_items]
+    ]
 
 
 def search_funds(keyword, limit=10):
@@ -144,45 +204,8 @@ def search_funds(keyword, limit=10):
     except Exception:
         max_items = 10
 
-    df = cache.get('df')
-    code_col = cache.get('code_col')
-    name_col = cache.get('name_col')
-    if df is None or not code_col or not name_col:
-        return []
-
     try:
-        records = []
-        for row in df[[code_col, name_col, 'clean_name']].to_dict('records'):
-            code = str(row.get(code_col, '') or '').zfill(6)
-            name = str(row.get(name_col, '') or '').strip()
-            clean_name = str(row.get('clean_name', '') or '').lower()
-            if not code or not name:
-                continue
-
-            score = None
-            if code == normalized_query:
-                score = 0
-            elif code.startswith(normalized_query):
-                score = 1
-            elif normalized_query in clean_name:
-                score = 2
-            elif normalized_query in name.lower():
-                score = 3
-
-            if score is None:
-                continue
-
-            records.append({
-                'code': code,
-                'name': name,
-                'match_score': score,
-            })
-
-        records.sort(key=lambda item: (item['match_score'], len(item['code']), item['code']))
-        return [
-            {'code': item['code'], 'name': item['name']}
-            for item in records[:max_items]
-        ]
+        return _search_funds_cached(normalized_query, max_items)
     except Exception:
         return []
 
@@ -453,14 +476,65 @@ def _fetch_and_cache_basic(code):
     result = get_fund_estimate(norm_code)
     if result:
         cache_set('basic', norm_code, result)
+        set_basic_quote(norm_code, result)
     return result
 
 
+def _fetch_cache_and_release_basic_lock(code, lock_token):
+    try:
+        return _fetch_and_cache_basic(code)
+    finally:
+        release_basic_quote_refresh_lock(code, lock_token)
+
+
+def _wait_for_remote_basic_refresh(code, wait_seconds=BASIC_WAIT_FOR_REMOTE_REFRESH_SECONDS):
+    norm_code = str(code).zfill(6)
+    deadline = time.time() + max(wait_seconds, BASIC_WAIT_STEP_SECONDS)
+    while time.time() < deadline:
+        fresh = get_basic_quote(norm_code, TTL_BASIC_SECONDS)
+        if fresh:
+            cache_set('basic', norm_code, fresh)
+            return fresh
+        time.sleep(BASIC_WAIT_STEP_SECONDS)
+
+    stale = get_stale_basic_quote(norm_code)
+    if stale:
+        cache_set('basic', norm_code, stale)
+    return stale
+
+
+def _resolved_future(result):
+    future = Future()
+    future.set_result(result)
+    return future
+
+
 def submit_basic_refresh(code, executor):
-    future = get_inflight_basic(code)
+    norm_code = str(code).zfill(6)
+    future = get_inflight_basic(norm_code)
     if future:
+        increment_metric('cache.basic.inflight_reuse')
         return future
-    return set_inflight_basic(code, executor.submit(_fetch_and_cache_basic, str(code).zfill(6)))
+
+    lock_token = acquire_basic_quote_refresh_lock(norm_code, BASIC_REFRESH_LOCK_SECONDS)
+    if lock_token:
+        increment_metric('cache.basic.refresh_owner')
+        return set_inflight_basic(
+            norm_code,
+            executor.submit(_fetch_cache_and_release_basic_lock, norm_code, lock_token)
+        )
+
+    fresh = get_basic_quote(norm_code, TTL_BASIC_SECONDS)
+    if fresh:
+        increment_metric('cache.basic.redis_waiter_hit')
+        cache_set('basic', norm_code, fresh)
+        return _resolved_future(fresh)
+
+    increment_metric('cache.basic.refresh_waiter')
+    return set_inflight_basic(
+        norm_code,
+        executor.submit(_wait_for_remote_basic_refresh, norm_code)
+    )
 
 
 def build_timeout_placeholder(code):
@@ -483,8 +557,20 @@ def build_timeout_placeholder(code):
 def load_basic_for_detail(code, request_timeout=DETAIL_REQUEST_TIMEOUT_SECONDS):
     basic = cache_get('basic', code, TTL_BASIC_SECONDS)
     if basic:
+        increment_metric('cache.basic.local_hit')
         return basic
+    redis_basic = get_basic_quote(code, TTL_BASIC_SECONDS)
+    if redis_basic:
+        increment_metric('cache.basic.redis_hit')
+        cache_set('basic', code, redis_basic)
+        return redis_basic
     stale_basic = cache_get_stale('basic', code)
+    if not stale_basic:
+        stale_basic = get_stale_basic_quote(code)
+        if stale_basic:
+            cache_set('basic', code, stale_basic)
+    if stale_basic:
+        increment_metric('cache.basic.stale_hit')
     future = submit_basic_refresh(code, FUNDS_EXECUTOR)
     done, _ = futures_wait([future], timeout=request_timeout)
     if done:
@@ -504,14 +590,26 @@ def fetch_funds_parallel(codes, request_timeout=15):
     for code in norm_codes:
         fresh = cache_get('basic', code, TTL_BASIC_SECONDS)
         if fresh:
+            increment_metric('cache.basic.local_hit')
             results_map[code] = fresh
+            continue
+
+        redis_fresh = get_basic_quote(code, TTL_BASIC_SECONDS)
+        if redis_fresh:
+            increment_metric('cache.basic.redis_hit')
+            cache_set('basic', code, redis_fresh)
+            results_map[code] = redis_fresh
+            continue
+
+        stale = cache_get_stale('basic', code) or get_stale_basic_quote(code)
+        if stale:
+            increment_metric('cache.basic.stale_hit')
+            cache_set('basic', code, stale)
+        if stale and _should_use_stale_basic(stale):
+            results_map[code] = stale
+            submit_basic_refresh(code, BG_REFRESH_EXECUTOR)
         else:
-            stale = cache_get_stale('basic', code)
-            if stale and _should_use_stale_basic(stale):
-                results_map[code] = stale
-                submit_basic_refresh(code, BG_REFRESH_EXECUTOR)
-            else:
-                to_fetch.append(code)
+            to_fetch.append(code)
     if to_fetch:
         future_to_code = {submit_basic_refresh(code, FUNDS_EXECUTOR): code for code in to_fetch}
         done, not_done = futures_wait(future_to_code.keys(), timeout=request_timeout)

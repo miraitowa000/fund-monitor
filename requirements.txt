@@ -8,3 +8,4 @@ SQLAlchemy==2.0.39
 PyMySQL==1.1.1
 cryptography>=42,<45
 python-dotenv==1.0.1
+redis==5.0.4

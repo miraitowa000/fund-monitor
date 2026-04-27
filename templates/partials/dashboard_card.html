@@ -1,5 +1,5 @@
 <div class="dashboard-shell">
-  <section class="page-top-search-panel">
+  <section class="page-top-search-panel" data-sticky-panel="top-search">
     <div class="page-top-search-panel__head">
       <div class="page-top-search-panel__brand">
         <h1>基金实时监控</h1>
@@ -30,6 +30,29 @@
                 @keydown.down.prevent="focusQuickSearchFirst"
                 @keyup.enter="openQuickAddConfirm"
               >
+              <div v-if="quickSearchOpen" class="topbar-fund-search__dropdown">
+                <div v-if="quickSearchLoading" class="quick-add-dropdown__state">搜索中...</div>
+                <div v-else-if="quickSearchError" class="quick-add-dropdown__state danger">[[ quickSearchError ]]</div>
+                <div v-else-if="quickSearchResultsView.length === 0" class="quick-add-dropdown__state">没有匹配的基金</div>
+                <div v-else>
+                  <button
+                    v-for="item in quickSearchResultsView"
+                    :key="item.code"
+                    type="button"
+                    class="quick-add-option topbar-fund-search__option"
+                    @click="toggleQuickAddSelection(item)"
+                  >
+                    <div class="quick-add-option__main">
+                      <strong>[[ item.name ]]</strong>
+                      <span>[[ item.code ]]</span>
+                    </div>
+                    <div
+                      class="topbar-fund-search__check"
+                      :class="{ 'is-selected': item.isSelected }"
+                    ></div>
+                  </button>
+                </div>
+              </div>
             </div>
             <button
               type="button"
@@ -173,7 +196,26 @@
           </div>
         </div>
         <div class="group-tabs">
-          <div v-for="group in tabGroups" :key="group.id" class="group-tab-item">
+          <div v-for="group in tabGroups" :key="group.id" class="group-tab-item" :class="{ 'group-tab-item--editing': editingGroupId === String(group.id) }">
+            <template v-if="editingGroupId === String(group.id)">
+              <div class="group-inline-edit">
+                <div class="inline-group-creator inline-group-creator--edit">
+                  <input
+                    :id="`inlineGroupEditInput-${group.id}`"
+                    type="text"
+                    class="inline-group-creator__input"
+                    v-model="editingGroupName"
+                    @keyup.enter="submitInlineGroupEdit"
+                    @keyup.esc="cancelInlineGroupEdit"
+                    placeholder="输入分组名称"
+                  >
+                  <button type="button" class="inline-group-creator__confirm" @click="submitInlineGroupEdit" :disabled="renamingGroup">保存</button>
+                  <button type="button" class="inline-group-creator__cancel" @click="cancelInlineGroupEdit">取消</button>
+                </div>
+                <div v-if="groupActionError" class="group-inline-edit__error">[[ groupActionError ]]</div>
+              </div>
+            </template>
+            <template v-else>
             <button
               type="button"
               class="group-tab"
@@ -198,16 +240,32 @@
                 </svg>
               </button>
             </div>
+              <div
+                v-if="isMobileView && mobileGroupActionsId === String(group.id) && String(activeGroupId) === String(group.id) && group.id !== 'all'"
+                class="group-tab-actions group-tab-actions--visible mobile-only"
+              >
+              <button type="button" class="group-icon-btn" title="编辑分组" @click.stop="startInlineGroupEdit(group)">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M11.7 1.3a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4l-7.9 7.9-3.3.8.8-3.3 7.4-7.4zM10.3 2.7 3.9 9.1l-.4 1.6 1.6-.4 6.4-6.4-1.2-1.2z"/>
+                </svg>
+              </button>
+              <button type="button" class="group-icon-btn danger" title="删除分组" @click.stop="openDeleteGroupModal">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M6 1h4l.6 1H14v2H2V2h3.4L6 1zm-2 4h8l-.7 9H4.7L4 5zm2 2v5h1V7H6zm3 0v5h1V7H9z"/>
+                </svg>
+              </button>
+            </div>
+            </template>
           </div>
 
-          <div class="group-tab-item group-tab-item--create" v-if="!addingGroupInline">
+          <div class="group-tab-item group-tab-item--create" v-if="!addingGroupInline && !editingGroupId">
             <button type="button" class="group-tab group-tab--create" @click="openInlineGroupCreate">
               <span class="group-tab-plus">+</span>
               <span class="group-tab-label">新增分组</span>
             </button>
           </div>
 
-          <div class="inline-group-creator" v-else>
+          <div class="inline-group-creator" v-else-if="addingGroupInline">
             <input
               id="inlineGroupNameInput"
               type="text"

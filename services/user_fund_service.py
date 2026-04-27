@@ -4,8 +4,16 @@ from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.orm import joinedload
 
 from core.db import Base, engine, session_scope
+from core.perf_metrics import increment_metric
 from core.models import FundGroup, User, UserFund
+from services.dashboard_cache_service import invalidate_dashboard_bootstrap
 from services.fund_basic_service import get_fund_estimate
+from services.portfolio_cache_service import invalidate_user_portfolio
+from services.snapshot_cache_service import (
+    get_user_snapshot as get_cached_user_snapshot,
+    invalidate_user_snapshot,
+    set_user_snapshot,
+)
 
 
 def init_database():
@@ -164,61 +172,90 @@ def ensure_user(client_id):
         return user.id
 
 
+def _invalidate_user_view_caches(client_id):
+    invalidate_dashboard_bootstrap(client_id)
+    invalidate_user_snapshot(client_id)
+    invalidate_user_portfolio(client_id)
+
+
+def _list_groups_with_counts_for_session(session, user_id):
+    groups = session.execute(
+        select(FundGroup)
+        .where(FundGroup.user_id == user_id)
+        .order_by(FundGroup.sort_order.asc(), FundGroup.id.asc())
+    ).scalars().all()
+
+    counts = dict(session.execute(
+        select(UserFund.group_id, func.count(UserFund.id))
+        .where(UserFund.user_id == user_id)
+        .group_by(UserFund.group_id)
+    ).all())
+
+    payload = []
+    for group in groups:
+        payload.append({
+            'id': group.id,
+            'name': _normalize_group_name(group),
+            'sort_order': group.sort_order,
+            'is_default': False,
+            'count': int(counts.get(group.id, 0)),
+        })
+    return payload
+
+
+def _list_user_funds_for_session(session, user_id):
+    funds = session.execute(
+        select(UserFund)
+        .where(UserFund.user_id == user_id)
+        .options(joinedload(UserFund.group))
+        .order_by(UserFund.sort_order.asc(), UserFund.id.asc())
+    ).scalars().all()
+    return [_serialize_user_fund(fund) for fund in funds]
+
+
 def list_groups_with_counts(client_id):
     user_id = ensure_user(client_id)
     with session_scope() as session:
-        groups = session.execute(
-            select(FundGroup)
-            .where(FundGroup.user_id == user_id)
-            .order_by(FundGroup.sort_order.asc(), FundGroup.id.asc())
-        ).scalars().all()
-
-        counts = dict(session.execute(
-            select(UserFund.group_id, func.count(UserFund.id))
-            .where(UserFund.user_id == user_id)
-            .group_by(UserFund.group_id)
-        ).all())
-
-        payload = []
-        for group in groups:
-            payload.append({
-                'id': group.id,
-                'name': _normalize_group_name(group),
-                'sort_order': group.sort_order,
-                'is_default': False,
-                'count': int(counts.get(group.id, 0)),
-            })
+        payload = _list_groups_with_counts_for_session(session, user_id)
         session.flush()
-        return payload
+    return payload
 
 
 def list_user_funds(client_id):
     user_id = ensure_user(client_id)
     with session_scope() as session:
-        funds = session.execute(
-            select(UserFund)
-            .where(UserFund.user_id == user_id)
-            .options(joinedload(UserFund.group))
-            .order_by(UserFund.sort_order.asc(), UserFund.id.asc())
-        ).scalars().all()
-
-        payload = [_serialize_user_fund(fund) for fund in funds]
+        payload = _list_user_funds_for_session(session, user_id)
         session.flush()
-        return payload
+    return payload
 
 
-def get_user_snapshot(client_id):
+def _build_user_snapshot_payload(client_id):
     user_id = ensure_user(client_id)
     with session_scope() as session:
         user = session.execute(select(User).where(User.id == user_id)).scalar_one()
-        groups = list_groups_with_counts(client_id)
-        funds = list_user_funds(client_id)
-        return {
+        payload = {
             'client_id': user.client_id,
             'initialized': bool(user.initialized),
-            'groups': groups,
-            'funds': funds,
+            'groups': _list_groups_with_counts_for_session(session, user_id),
+            'funds': _list_user_funds_for_session(session, user_id),
         }
+        session.flush()
+    return payload
+
+
+def get_user_snapshot(client_id, force_refresh=False):
+    if not force_refresh:
+        cached = get_cached_user_snapshot(client_id)
+        if cached:
+            increment_metric('cache.snapshot.hit')
+            return cached
+        increment_metric('cache.snapshot.miss')
+    else:
+        increment_metric('cache.snapshot.force_refresh')
+
+    payload = _build_user_snapshot_payload(client_id)
+    set_user_snapshot(client_id, payload)
+    return payload
 
 
 def create_group(client_id, name):
@@ -245,13 +282,15 @@ def create_group(client_id, name):
         )
         session.add(group)
         session.flush()
-        return {
+        result = {
             'id': group.id,
             'name': group.name,
             'sort_order': group.sort_order,
             'is_default': False,
             'count': 0,
         }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def rename_group(client_id, group_id, name):
@@ -279,12 +318,14 @@ def rename_group(client_id, group_id, name):
 
         group.name = normalized_name
         session.flush()
-        return {
+        result = {
             'id': group.id,
             'name': group.name,
             'sort_order': group.sort_order,
             'is_default': False,
         }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def delete_group(client_id, group_id):
@@ -308,12 +349,14 @@ def delete_group(client_id, group_id):
 
         session.delete(group)
         session.flush()
-        return {
+        result = {
             'deleted': True,
             'moved_count': int(moved_count),
             'target_group_id': None,
             'target_group_name': '',
         }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def add_or_update_user_fund(client_id, fund_code, group_id=None):
@@ -338,32 +381,34 @@ def add_or_update_user_fund(client_id, fund_code, group_id=None):
         if fund:
             fund.group_id = group.id if group else None
             session.flush()
-            return {
+            result = {
                 'code': fund.fund_code,
                 'group_id': fund.group_id,
                 'group_name': _normalize_group_name(group) if group else '',
                 'updated': True,
             }
-
-        max_sort = session.execute(
-            select(func.max(UserFund.sort_order)).where(UserFund.user_id == user_id)
-        ).scalar_one_or_none()
-        fund = UserFund(
-            user_id=user_id,
-            group_id=group.id if group else None,
-            fund_code=code,
-            sort_order=(max_sort or 0) + 1,
-        )
-        session.add(fund)
-        user = session.execute(select(User).where(User.id == user_id)).scalar_one()
-        user.initialized = True
-        session.flush()
-        return {
-            'code': fund.fund_code,
-            'group_id': fund.group_id,
-            'group_name': _normalize_group_name(group) if group else '',
-            'updated': False,
-        }
+        else:
+            max_sort = session.execute(
+                select(func.max(UserFund.sort_order)).where(UserFund.user_id == user_id)
+            ).scalar_one_or_none()
+            fund = UserFund(
+                user_id=user_id,
+                group_id=group.id if group else None,
+                fund_code=code,
+                sort_order=(max_sort or 0) + 1,
+            )
+            session.add(fund)
+            user = session.execute(select(User).where(User.id == user_id)).scalar_one()
+            user.initialized = True
+            session.flush()
+            result = {
+                'code': fund.fund_code,
+                'group_id': fund.group_id,
+                'group_name': _normalize_group_name(group) if group else '',
+                'updated': False,
+            }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def move_user_fund(client_id, fund_code, group_id):
@@ -380,25 +425,27 @@ def move_user_fund(client_id, fund_code, group_id):
         if group_id in (None, '', 'null'):
             fund.group_id = None
             session.flush()
-            return {
+            result = {
                 'code': fund.fund_code,
                 'group_id': fund.group_id,
                 'group_name': '',
             }
+        else:
+            group = session.execute(
+                select(FundGroup).where(FundGroup.user_id == user_id, FundGroup.id == int(group_id))
+            ).scalar_one_or_none()
+            if not group:
+                raise ValueError('\u76ee\u6807\u5206\u7ec4\u4e0d\u5b58\u5728')
 
-        group = session.execute(
-            select(FundGroup).where(FundGroup.user_id == user_id, FundGroup.id == int(group_id))
-        ).scalar_one_or_none()
-        if not group:
-            raise ValueError('\u76ee\u6807\u5206\u7ec4\u4e0d\u5b58\u5728')
-
-        fund.group_id = group.id
-        session.flush()
-        return {
-            'code': fund.fund_code,
-            'group_id': fund.group_id,
-            'group_name': _normalize_group_name(group),
-        }
+            fund.group_id = group.id
+            session.flush()
+            result = {
+                'code': fund.fund_code,
+                'group_id': fund.group_id,
+                'group_name': _normalize_group_name(group),
+            }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def update_user_fund_position_snapshot(client_id, fund_code, holding_amount, holding_profit):
@@ -442,7 +489,7 @@ def update_user_fund_position_snapshot(client_id, fund_code, holding_amount, hol
         fund.position_updated_at = now
         session.flush()
 
-        return {
+        result = {
             'success': True,
             'code': fund.fund_code,
             'position': {
@@ -450,6 +497,8 @@ def update_user_fund_position_snapshot(client_id, fund_code, holding_amount, hol
                 **_normalize_position_payload(fund),
             },
         }
+    _invalidate_user_view_caches(client_id)
+    return result
 
 
 def delete_user_fund(client_id, fund_code):
@@ -463,7 +512,9 @@ def delete_user_fund(client_id, fund_code):
         if not fund:
             return False
         session.delete(fund)
-        return True
+        session.flush()
+    _invalidate_user_view_caches(client_id)
+    return True
 
 
 def bootstrap_user_funds(client_id, codes):
@@ -485,16 +536,18 @@ def bootstrap_user_funds(client_id, codes):
             user = session.execute(select(User).where(User.id == user_id)).scalar_one()
             user.initialized = True
             session.flush()
-            return {'imported': 0, 'skipped': len(normalized_codes), 'already_initialized': True}
-
-        for index, code in enumerate(normalized_codes, start=1):
-            session.add(UserFund(
-                user_id=user_id,
-                group_id=None,
-                fund_code=code,
-                sort_order=index,
-            ))
-        user = session.execute(select(User).where(User.id == user_id)).scalar_one()
-        user.initialized = True
-        session.flush()
-        return {'imported': len(normalized_codes), 'skipped': 0, 'already_initialized': False}
+            result = {'imported': 0, 'skipped': len(normalized_codes), 'already_initialized': True}
+        else:
+            for index, code in enumerate(normalized_codes, start=1):
+                session.add(UserFund(
+                    user_id=user_id,
+                    group_id=None,
+                    fund_code=code,
+                    sort_order=index,
+                ))
+            user = session.execute(select(User).where(User.id == user_id)).scalar_one()
+            user.initialized = True
+            session.flush()
+            result = {'imported': len(normalized_codes), 'skipped': 0, 'already_initialized': False}
+    _invalidate_user_view_caches(client_id)
+    return result

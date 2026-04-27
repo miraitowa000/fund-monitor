@@ -1,4 +1,10 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fund-monitor-redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+
   fund-monitor:
     build:
       context: .
@@ -9,11 +15,29 @@ services:
       - .env.production
     environment:
       APP_ENV: production
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8065:5000"
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  quote-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fund-monitor-quote-worker
+    restart: always
+    command: ["python", "-m", "workers.quote_worker"]
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
