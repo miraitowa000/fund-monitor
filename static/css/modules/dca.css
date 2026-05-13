@@ -1,0 +1,227 @@
+.dca-modal-overlay {
+  z-index: 2270;
+}
+
+.dca-modal {
+  width: min(500px, 100%);
+  max-height: min(88vh, 760px);
+  overflow: visible;
+}
+
+.dca-form {
+  gap: 16px;
+  min-height: 0;
+}
+
+.dca-form__body {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+  overflow: visible;
+}
+
+.dca-calendar {
+  left: 0;
+  right: auto;
+  z-index: 240;
+}
+
+.dca-calendar.is-up {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+.dca-form .transaction-calendar-backdrop {
+  z-index: 50;
+}
+
+.dca-switch {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px !important;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--bg-panel-soft);
+}
+
+.dca-switch > span {
+  display: grid;
+  gap: 5px;
+}
+
+.dca-switch strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.dca-switch em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.dca-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dca-switch i {
+  position: relative;
+  width: 48px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.32);
+  transition: background 0.16s ease;
+}
+
+.dca-switch i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.22);
+  transition: transform 0.16s ease;
+}
+
+.dca-switch input:checked + i {
+  background: linear-gradient(135deg, #22c55e, #06b6d4);
+}
+
+.dca-switch input:checked + i::after {
+  transform: translateX(22px);
+}
+
+.dca-field-label {
+  margin-bottom: -6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dca-field-block {
+  display: grid;
+  gap: 12px;
+}
+
+.dca-field-error {
+  margin-top: -3px;
+  color: var(--danger-color);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.dca-form input.invalid,
+.dca-form .transaction-date-field.invalid {
+  border-color: rgba(239, 68, 68, 0.9);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
+}
+
+.dca-cycle-grid,
+.dca-weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dca-weekday-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.dca-cycle-grid button,
+.dca-weekday-grid button,
+.dca-month-grid button {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid var(--border-color);
+  border-radius: 11px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dca-cycle-grid button.active,
+.dca-weekday-grid button.active,
+.dca-month-grid button.active {
+  border-color: rgba(34, 211, 238, 0.78);
+  background: #22d3ee;
+  color: #06202c;
+  box-shadow: 0 8px 18px rgba(34, 211, 238, 0.18);
+}
+
+.dca-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 148px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.58) transparent;
+}
+
+.dca-month-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dca-month-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.58);
+}
+
+.dca-month-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dca-month-grid button {
+  height: 34px;
+  border-radius: 10px;
+}
+
+.dca-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 14px;
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.dca-summary span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dca-summary strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.transaction-form__cancel.danger {
+  color: var(--danger-color);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.transaction-form__actions.dca-form__actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 2px;
+}
+
+.transaction-form__actions.dca-form__actions.has-delete {
+  grid-template-columns: auto 1fr 1fr;
+}

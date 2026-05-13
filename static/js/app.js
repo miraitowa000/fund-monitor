@@ -3,12 +3,17 @@ import {
   deleteFundGroup,
   deleteUserFund,
   fetchDashboardBootstrap,
+  fetchAuthMe,
+  fetchDailyEarnings,
   fetchPortfolio,
   fetchIndexesRaw,
+  fetchMarketStatus,
   fetchUserFundsMeta,
   loadFundHistory,
+  loginAccount,
   moveUserFundGroup,
   renameFundGroup,
+  registerAccount,
   saveUserFund,
   searchFunds,
   updateUserFundPosition,
@@ -29,10 +34,13 @@ import {
   toMinute,
 } from './cache.js';
 import { buildPortfolioViewState } from './dashboard-state.js';
+import { createConversionController } from './conversion-controller.js';
 import { createDetailController } from './detail-modal.js';
+import { createDcaController } from './dca-controller.js';
 import {
   EMPTY_DETAIL,
   clearSavedCodes,
+  createClientId,
   formatChange,
   getColorClass,
   getIndexCardClass,
@@ -40,18 +48,21 @@ import {
   getSortIcon,
   loadClientId,
   loadSavedCodes,
+  saveClientId,
 } from './formatters.js';
 import { createRefreshTimers } from './timers.js';
+import { createTransactionController } from './transaction-controller.js';
 
 const THEME_STORAGE_KEY = 'fundMonitorTheme';
 const RELEASE_NOTICE_STORAGE_KEY = 'fundMonitorReleaseNoticeSeen';
-const RELEASE_NOTICE_VERSION = 'release-2026-04-24-search-list-polish';
+const RELEASE_NOTICE_VERSION = 'release-2026-05-13-trading-earnings';
 const RELEASE_NOTICE_TITLE = '更新说明';
 const RELEASE_NOTICE_ITEMS = [
-  { id: '1', text: '新增基金搜索，支持按代码或名称快速查找。' },
-  { id: '2', text: '支持一次选择多只基金并批量添加。' },
-  { id: '3', text: '优化基金列表展示，补充单位净值和估算净值。' },
-  { id: '4', text: '优化分组展示与切换交互。' }
+  { id: '1', text: '新增登录注册，支持交易数据按账号保存。' },
+  { id: '2', text: '新增加仓、减仓、定投、转换等交易记录功能。' },
+  { id: '3', text: '新增我的收益，支持按日、月、年查看盈亏。' },
+  { id: '4', text: '优化移动端布局和持仓操作体验。' },
+  { id: '5', text: '修复收益统计、今日走势等展示问题。' }
 ];
 
 const { createApp, ref, onMounted, onUnmounted, computed, nextTick, watch } = window.Vue;
@@ -68,7 +79,7 @@ const isLunchBreakMinute = (minute) => {
 
 const app = createApp({
   setup() {
-    const clientId = loadClientId();
+    const clientId = ref(loadClientId());
     const codeInput = ref('');
     const selectedGroupId = ref('');
     const newGroupName = ref('');
@@ -78,6 +89,7 @@ const app = createApp({
     const activeGroupId = ref('all');
     const funds = ref([]);
     const portfolioItems = ref([]);
+    const fundListVersion = ref(0);
     const portfolioSummary = ref({
       total_holding_amount: 0,
       total_daily_profit: 0,
@@ -92,6 +104,7 @@ const app = createApp({
     const loading = ref(false);
     const lastUpdateTime = ref('-');
     const now = ref(new Date());
+    const isTodayTradingDay = ref(true);
     const sortDir = ref('none');
     const detailFund = ref(EMPTY_DETAIL());
     const detailLoading = ref(false);
@@ -131,6 +144,7 @@ const app = createApp({
     const quickAddSelection = ref([]);
     const quickAddConfirmOpen = ref(false);
     const quickAddGroupId = ref('');
+    const quickAddGroupMenuOpen = ref(false);
     const quickAddSaving = ref(false);
     const summaryExpanded = ref(true);
     const isMobileView = ref(false);
@@ -140,9 +154,37 @@ const app = createApp({
       code: '',
       name: ''
     });
+    const holdingActionFund = ref(null);
     const clearingAllFunds = ref(false);
     const savingPosition = ref(false);
     const positionActionError = ref('');
+    const authUser = ref(null);
+    const authMenuOpen = ref(false);
+    const authModalOpen = ref(false);
+    const authMode = ref('login');
+    const authLoading = ref(false);
+    const authError = ref('');
+    const authForm = ref({
+      account: '',
+      password: ''
+    });
+    const mobileActiveTab = ref('home');
+    const earningsViewOpen = ref(false);
+    const earningsLoading = ref(false);
+    const earningsLoaded = ref(false);
+    const earningsError = ref('');
+    const earningsMode = ref('amount');
+    const earningsViewMode = ref('day');
+    const earningsCursorMonth = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+    const earningsCursorYear = ref(new Date().getFullYear());
+    const earningsSelectedDate = ref('');
+    const earningsSelectedMonth = ref('');
+    const earningsSelectedYear = ref('');
+    const earningsRankTab = ref('profit');
+    const dailyEarnings = ref({
+      summary: {},
+      days: []
+    });
 
     let clockTimer = null;
     let renameGroupModal = null;
@@ -158,6 +200,9 @@ const app = createApp({
     let fundsRefreshPromise = null;
     let indexesRefreshPromise = null;
     let stickyPanelResizeObserver = null;
+    let portfolioRenderTimer = null;
+    let latestEarningsRequestId = 0;
+    const earningsRangeCache = new Map();
 
     const parseNumber = (val) => {
       const n = parseFloat(val);
@@ -194,6 +239,638 @@ const app = createApp({
       return n.toFixed(4);
     };
 
+    const accountDisplayName = computed(() => {
+      const account = String(authUser.value?.account || '').trim();
+      if (!account) return '未登录';
+      if (account.includes('@')) {
+        const [name, domain] = account.split('@');
+        const maskedName = name.length > 2 ? `${name.slice(0, 2)}***` : `${name.slice(0, 1)}***`;
+        return `${maskedName}@${domain}`;
+      }
+      if (/^\d{11}$/.test(account)) {
+        return `${account.slice(0, 3)}****${account.slice(7)}`;
+      }
+      return account;
+    });
+
+    const resetAuthForm = () => {
+      authForm.value = { account: '', password: '' };
+      authError.value = '';
+    };
+
+    const loadAuthState = async () => {
+      try {
+        const result = await fetchAuthMe(clientId.value);
+        authUser.value = result?.registered ? result : null;
+      } catch {
+        authUser.value = null;
+      }
+    };
+
+    const toggleAuthMenu = () => {
+      authMenuOpen.value = !authMenuOpen.value;
+    };
+
+    const switchMobileTab = (tab) => {
+      mobileActiveTab.value = tab === 'mine' ? 'mine' : 'home';
+      if (mobileActiveTab.value === 'home') {
+        nextTick(() => {
+          resizeDetailCharts();
+        });
+      }
+    };
+
+    const openAuthModal = (mode = 'login') => {
+      authMode.value = mode === 'register' ? 'register' : 'login';
+      authMenuOpen.value = false;
+      resetAuthForm();
+      authModalOpen.value = true;
+    };
+
+    const closeAuthModal = () => {
+      if (authLoading.value) return;
+      authModalOpen.value = false;
+      resetAuthForm();
+    };
+
+    const switchAuthMode = (mode) => {
+      authMode.value = mode === 'register' ? 'register' : 'login';
+      authError.value = '';
+    };
+
+    const submitAuthForm = async () => {
+      const account = authForm.value.account.trim();
+      const password = authForm.value.password;
+      if (!account || !password) {
+        authError.value = '请输入账号和密码';
+        return;
+      }
+      authLoading.value = true;
+      authError.value = '';
+      try {
+        const result = authMode.value === 'register'
+          ? await registerAccount(clientId.value, account, password)
+          : await loginAccount(account, password);
+        if (result?.error || result?.success === false || !result?.user) {
+          authError.value = result?.error || '操作失败，请稍后重试';
+          return;
+        }
+        const nextClientId = saveClientId(result.user.client_id);
+        if (nextClientId) {
+          clientId.value = nextClientId;
+        }
+        authUser.value = result.user;
+        authModalOpen.value = false;
+        resetAuthForm();
+        currentFundCode.value = '';
+        currentFundName.value = '';
+        detailFund.value = EMPTY_DETAIL();
+        detailError.value = '';
+        detailTab.value = 'overview';
+        historyData.value = { success: false, data: [] };
+        historyFundCode.value = '';
+        await fetchData();
+      } finally {
+        authLoading.value = false;
+      }
+    };
+
+    const logoutAccount = async () => {
+      const anonymousClientId = saveClientId(createClientId());
+      clientId.value = anonymousClientId || createClientId();
+      authUser.value = null;
+      authMenuOpen.value = false;
+      earningsViewOpen.value = false;
+      dailyEarnings.value = { summary: {}, days: [] };
+      currentFundCode.value = '';
+      currentFundName.value = '';
+      detailFund.value = EMPTY_DETAIL();
+      detailError.value = '';
+      detailTab.value = 'overview';
+      historyData.value = { success: false, data: [] };
+      historyFundCode.value = '';
+      await fetchData();
+    };
+
+    const openMyEarnings = () => {
+      authMenuOpen.value = false;
+      if (!authUser.value) {
+        openAuthModal('login');
+        return;
+      }
+      alert('我的收益功能后续接入');
+    };
+
+    const formatDateForApi = (date) => {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+
+    const getMonthEarningsRange = () => {
+      const cursor = earningsCursorMonth.value;
+      const startDate = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+      const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+      const todayDate = new Date();
+      const endDate = monthEnd > todayDate ? todayDate : monthEnd;
+      return { start: formatDateForApi(startDate), end: formatDateForApi(endDate) };
+    };
+
+    const clampEndDate = (date) => {
+      const today = new Date();
+      return date > today ? today : date;
+    };
+
+    const getEarningsYearRange = (year) => ({
+      start: formatDateForApi(new Date(year, 0, 1)),
+      end: formatDateForApi(clampEndDate(new Date(year, 11, 31)))
+    });
+
+    const getEarningsYearWindow = () => {
+      const endYear = Math.min(earningsCursorYear.value, new Date().getFullYear());
+      const startYear = endYear - 5;
+      return { startYear, endYear };
+    };
+
+    const getEarningsRequestRanges = () => {
+      if (earningsViewMode.value === 'day') {
+        return [getMonthEarningsRange()];
+      }
+      if (earningsViewMode.value === 'month') {
+        return [getEarningsYearRange(earningsCursorMonth.value.getFullYear())];
+      }
+      const { startYear, endYear } = getEarningsYearWindow();
+      return Array.from({ length: endYear - startYear + 1 }, (_, index) => (
+        getEarningsYearRange(startYear + index)
+      ));
+    };
+
+    const formatCompactSigned = (value, digits = 2) => {
+      const n = parseNumber(value);
+      if (!Number.isFinite(n)) return '0.00';
+      const sign = n > 0 ? '+' : '';
+      return `${sign}${n.toFixed(digits)}`;
+    };
+
+    const getDefaultEarningsRange = () => {
+      const endDate = new Date();
+      const startDate = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+      const toText = (date) => {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      };
+      return { start: toText(startDate), end: toText(endDate) };
+    };
+
+    const loadDailyEarnings = async () => {
+      if (!authUser.value) return;
+      const requestId = ++latestEarningsRequestId;
+      earningsLoading.value = true;
+      earningsError.value = '';
+      try {
+        const ranges = getEarningsRequestRanges();
+        const results = await Promise.all(ranges.map(async (range) => {
+          const cacheKey = `${range.start}:${range.end}`;
+          if (earningsRangeCache.has(cacheKey)) {
+            return earningsRangeCache.get(cacheKey);
+          }
+          const result = await fetchDailyEarnings(clientId.value, range.start, range.end);
+          if (result?.error || result?.success === false) {
+            throw new Error(result?.error || '加载收益数据失败');
+          }
+          earningsRangeCache.set(cacheKey, result);
+          return result;
+        }));
+        if (requestId !== latestEarningsRequestId) return;
+        const days = results.flatMap((item) => Array.isArray(item.days) ? item.days : []);
+        const totalProfit = days.reduce((sum, item) => sum + (parseNumber(item.profit) || 0), 0);
+        const totalBase = days.reduce((sum, item) => sum + (parseNumber(item.base_amount) || 0), 0);
+        dailyEarnings.value = {
+          summary: {
+            total_profit: Number(totalProfit.toFixed(2)),
+            total_rate: totalBase > 0 ? Number((totalProfit / totalBase).toFixed(4)) : null,
+            profit_days: days.filter((item) => (parseNumber(item.profit) || 0) > 0).length,
+            loss_days: days.filter((item) => (parseNumber(item.profit) || 0) < 0).length,
+            flat_days: days.filter((item) => (parseNumber(item.profit) || 0) === 0).length,
+          },
+          days
+        };
+        earningsLoaded.value = true;
+      } catch (error) {
+        if (requestId !== latestEarningsRequestId) return;
+        earningsError.value = error?.message || '加载收益数据失败';
+        if (!earningsLoaded.value) {
+          dailyEarnings.value = { summary: {}, days: [] };
+        }
+      } finally {
+        if (requestId === latestEarningsRequestId) {
+          earningsLoading.value = false;
+        }
+      }
+    };
+
+    const openMyEarningsPage = () => {
+      authMenuOpen.value = false;
+      if (!authUser.value) {
+        openAuthModal('login');
+        return;
+      }
+      earningsViewOpen.value = true;
+      if (isMobileView.value) mobileActiveTab.value = 'mine';
+      loadDailyEarnings();
+    };
+
+    const closeMyEarnings = () => {
+      earningsViewOpen.value = false;
+    };
+
+    const setEarningsMode = (mode) => {
+      earningsMode.value = mode === 'rate' ? 'rate' : 'amount';
+    };
+
+    const setEarningsViewMode = (mode) => {
+      const nextMode = ['day', 'month', 'year'].includes(mode) ? mode : 'day';
+      if (earningsViewMode.value === nextMode) return;
+      earningsViewMode.value = nextMode;
+      earningsSelectedDate.value = '';
+      earningsSelectedMonth.value = '';
+      earningsSelectedYear.value = '';
+      loadDailyEarnings();
+    };
+
+    const setEarningsRankTab = (tab) => {
+      earningsRankTab.value = tab === 'loss' ? 'loss' : 'profit';
+    };
+
+    const shiftEarningsPeriod = (offset) => {
+      if (earningsViewMode.value === 'year') {
+        const nextYear = earningsCursorYear.value + offset * 6;
+        earningsCursorYear.value = Math.min(nextYear, new Date().getFullYear());
+        earningsSelectedDate.value = '';
+        earningsSelectedMonth.value = '';
+        earningsSelectedYear.value = '';
+        loadDailyEarnings();
+        return;
+      }
+      const current = earningsCursorMonth.value;
+      const next = earningsViewMode.value === 'month'
+        ? new Date(current.getFullYear() + offset, 0, 1)
+        : new Date(current.getFullYear(), current.getMonth() + offset, 1);
+      const thisMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const capped = next > thisMonth ? thisMonth : next;
+      earningsCursorMonth.value = capped;
+      earningsSelectedDate.value = '';
+      earningsSelectedMonth.value = '';
+      earningsSelectedYear.value = '';
+      loadDailyEarnings();
+    };
+
+    const shiftEarningsMonth = shiftEarningsPeriod;
+
+    const formatEarningsValue = (day) => {
+      if (earningsMode.value === 'rate') {
+        return formatPercentText(day?.rate);
+      }
+      return formatCurrency(day?.profit);
+    };
+
+    const formatEarningsCellValue = (day) => {
+      if (!day) return '0.00';
+      if (earningsMode.value === 'rate') {
+        const n = parseNumber(day.rate);
+        if (!Number.isFinite(n)) return '0.00%';
+        return `${formatCompactSigned(n * 100)}%`;
+      }
+      return formatCompactSigned(day.profit);
+    };
+
+    const earningsValueClass = (day) => {
+      return getColorClass(earningsMode.value === 'rate' ? day?.rate : day?.profit);
+    };
+
+    const earningsCalendarTitle = computed(() => {
+      if (earningsViewMode.value === 'month') {
+        return `${earningsCursorMonth.value.getFullYear()}年`;
+      }
+      if (earningsViewMode.value === 'year') {
+        const { startYear, endYear } = getEarningsYearWindow();
+        return `${startYear}-${endYear}年`;
+      }
+      const cursor = earningsCursorMonth.value;
+      return `${cursor.getFullYear()}年${String(cursor.getMonth() + 1).padStart(2, '0')}月`;
+    });
+
+    const earningsSummaryTitle = computed(() => {
+      if (earningsViewMode.value === 'month') return '本年收益';
+      if (earningsViewMode.value === 'year') return '累计收益';
+      return '本月收益';
+    });
+
+    const earningsBoardTitle = computed(() => {
+      if (earningsViewMode.value === 'month') return '月度盈亏';
+      if (earningsViewMode.value === 'year') return '年度盈亏';
+      return '每日盈亏';
+    });
+
+    const getEarningsDayByDate = (date) => (
+      earningsMergedDays.value.find((day) => day.date === date) || null
+    );
+
+    const earningsTodayLiveDay = computed(() => {
+      const today = getTodayDate();
+      const items = (portfolioItems.value || [])
+        .filter((fund) => fund?.has_position)
+        .map((fund) => {
+          const profit = parseNumber(fund.daily_profit);
+          const base = parseNumber(fund.holding_shares) * parseNumber(fund.previous_nav);
+          if (!Number.isFinite(profit) || !Number.isFinite(base) || base <= 0) return null;
+          return {
+            code: fund.code,
+            name: fund.name || fund.code,
+            shares: parseNumber(fund.holding_shares),
+            nav: parseNumber(fund.current_nav),
+            previous_nav: parseNumber(fund.previous_nav),
+            profit: Number(profit.toFixed(2)),
+            base_amount: Number(base.toFixed(2)),
+            rate: profit / base
+          };
+        })
+        .filter(Boolean);
+      if (items.length === 0) return null;
+      const totalProfit = items.reduce((sum, item) => sum + item.profit, 0);
+      const totalBase = items.reduce((sum, item) => sum + item.base_amount, 0);
+      return {
+        date: today,
+        profit: Number(totalProfit.toFixed(2)),
+        rate: totalBase > 0 ? Number((totalProfit / totalBase).toFixed(4)) : null,
+        base_amount: Number(totalBase.toFixed(2)),
+        source: 'live',
+        items
+      };
+    });
+
+    const earningsMergedDays = computed(() => {
+      const liveDay = earningsTodayLiveDay.value;
+      const days = (dailyEarnings.value.days || []).filter((day) => (
+        !liveDay || day.date !== liveDay.date
+      ));
+      return liveDay ? [liveDay, ...days] : days;
+    });
+
+    const aggregateEarningsDays = (filterFn) => {
+      let profit = 0;
+      let baseAmount = 0;
+      let profitDays = 0;
+      let lossDays = 0;
+      earningsMergedDays.value.forEach((day) => {
+        if (!filterFn(day)) return;
+        const dayProfit = parseNumber(day.profit) || 0;
+        const dayBase = parseNumber(day.base_amount) || 0;
+        profit += dayProfit;
+        baseAmount += dayBase;
+        if (dayProfit > 0) profitDays += 1;
+        if (dayProfit < 0) lossDays += 1;
+      });
+      return {
+        profit: Number(profit.toFixed(2)),
+        base_amount: Number(baseAmount.toFixed(2)),
+        rate: baseAmount > 0 ? Number((profit / baseAmount).toFixed(4)) : null,
+        profit_days: profitDays,
+        loss_days: lossDays
+      };
+    };
+
+    const earningsVisibleDays = computed(() => {
+      if (earningsViewMode.value === 'day' && earningsSelectedDate.value) {
+        const day = getEarningsDayByDate(earningsSelectedDate.value);
+        return day ? [day] : [];
+      }
+      if (earningsViewMode.value === 'month' && earningsSelectedMonth.value) {
+        return earningsMergedDays.value.filter((day) => String(day.date || '').startsWith(earningsSelectedMonth.value));
+      }
+      if (earningsViewMode.value === 'year' && earningsSelectedYear.value) {
+        return earningsMergedDays.value.filter((day) => String(day.date || '').startsWith(`${earningsSelectedYear.value}-`));
+      }
+      return earningsMergedDays.value;
+    });
+
+    const earningsDisplaySummary = computed(() => {
+      const days = earningsVisibleDays.value;
+      const totalProfit = days.reduce((sum, item) => sum + (parseNumber(item.profit) || 0), 0);
+      const totalBase = days.reduce((sum, item) => sum + (parseNumber(item.base_amount) || 0), 0);
+      return {
+        total_profit: Number(totalProfit.toFixed(2)),
+        total_rate: totalBase > 0 ? Number((totalProfit / totalBase).toFixed(4)) : null,
+        profit_days: days.filter((item) => (parseNumber(item.profit) || 0) > 0).length,
+        loss_days: days.filter((item) => (parseNumber(item.profit) || 0) < 0).length,
+        flat_days: days.filter((item) => (parseNumber(item.profit) || 0) === 0).length,
+      };
+    });
+
+    const earningsDisplaySummaryTitle = computed(() => {
+      if (earningsViewMode.value === 'day' && earningsSelectedDate.value) {
+        return `${earningsSelectedDate.value} 收益`;
+      }
+      if (earningsViewMode.value === 'month' && earningsSelectedMonth.value) {
+        const [year, month] = earningsSelectedMonth.value.split('-');
+        return `${year}年${parseInt(month, 10)}月收益`;
+      }
+      if (earningsViewMode.value === 'year' && earningsSelectedYear.value) {
+        return `${earningsSelectedYear.value}年收益`;
+      }
+      return earningsSummaryTitle.value;
+    });
+
+    const earningsSummaryBadge = computed(() => {
+      if (earningsViewMode.value !== 'day') return '';
+      const today = getTodayDate();
+      const viewingToday = earningsSelectedDate.value === today || (!earningsSelectedDate.value && getMonthEarningsRange().end === today);
+      if (!viewingToday || !earningsTodayLiveDay.value) return '';
+      const source = portfolioSummary.value?.nav_source;
+      return source === 'confirmed' ? '已更新' : '实时估算';
+    });
+
+    const selectEarningsDate = (cell) => {
+      if (!cell || cell.future) return;
+      if (earningsSelectedDate.value === cell.date) {
+        earningsSelectedDate.value = '';
+        return;
+      }
+      earningsSelectedDate.value = cell.date;
+      if (cell.outside) {
+        const [year, month] = cell.date.split('-').map((value) => parseInt(value, 10));
+        earningsCursorMonth.value = new Date(year, month - 1, 1);
+        loadDailyEarnings();
+      }
+    };
+
+    const selectEarningsMonth = (cell) => {
+      if (!cell || cell.future) return;
+      earningsSelectedMonth.value = earningsSelectedMonth.value === cell.key ? '' : cell.key;
+    };
+
+    const selectEarningsYear = (cell) => {
+      if (!cell) return;
+      earningsSelectedYear.value = earningsSelectedYear.value === cell.key ? '' : cell.key;
+    };
+
+    const earningsCalendarDays = computed(() => {
+      const range = getMonthEarningsRange();
+      const [year, month] = range.start.split('-').map((value) => parseInt(value, 10));
+      const first = new Date(year, month - 1, 1);
+      const start = new Date(year, month - 1, 1 - first.getDay());
+      const byDate = new Map(earningsMergedDays.value.map((day) => [day.date, day]));
+      const todayText = range.end;
+      return Array.from({ length: 42 }, (_, index) => {
+        const date = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+        const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        const day = byDate.get(value) || null;
+        return {
+          date: value,
+          day: date.getDate(),
+          outside: date.getMonth() !== month - 1,
+          today: value === todayText,
+          future: value > todayText,
+          selected: value === earningsSelectedDate.value,
+          data: day,
+          value: formatEarningsCellValue(day),
+          className: day ? earningsValueClass(day) : ''
+        };
+      });
+    });
+
+    const earningsMonthCells = computed(() => {
+      const year = earningsCursorMonth.value.getFullYear();
+      const currentYear = new Date().getFullYear();
+      const currentMonth = new Date().getMonth() + 1;
+      return Array.from({ length: 12 }, (_, index) => {
+        const month = index + 1;
+        const data = aggregateEarningsDays((day) => {
+          const [dayYear, dayMonth] = String(day.date || '').split('-').map((value) => parseInt(value, 10));
+          return dayYear === year && dayMonth === month;
+        });
+        const future = year > currentYear || (year === currentYear && month > currentMonth);
+        return {
+          key: `${year}-${String(month).padStart(2, '0')}`,
+          label: `${month}月`,
+          future,
+          selected: earningsSelectedMonth.value === `${year}-${String(month).padStart(2, '0')}`,
+          data,
+          value: formatEarningsCellValue(data),
+          className: getColorClass(earningsMode.value === 'rate' ? data.rate : data.profit)
+        };
+      });
+    });
+
+    const earningsYearCells = computed(() => {
+      const { startYear, endYear } = getEarningsYearWindow();
+      return Array.from({ length: endYear - startYear + 1 }, (_, index) => {
+        const year = startYear + index;
+        const data = aggregateEarningsDays((day) => {
+          const dayYear = parseInt(String(day.date || '').slice(0, 4), 10);
+          return dayYear === year;
+        });
+        return {
+          key: String(year),
+          label: `${year}年`,
+          selected: earningsSelectedYear.value === String(year),
+          data,
+          value: formatEarningsCellValue(data),
+          className: getColorClass(earningsMode.value === 'rate' ? data.rate : data.profit)
+        };
+      });
+    });
+
+    const earningsRankItems = computed(() => {
+      const bucket = new Map();
+      earningsVisibleDays.value.forEach((day) => {
+        (day.items || []).forEach((item) => {
+          const code = item.code || '-';
+          const current = bucket.get(code) || {
+            code,
+            name: fundMetaMap.value[code]?.name || (portfolioItems.value || []).find((fund) => fund.code === code)?.name || code,
+            profit: 0,
+            base_amount: 0,
+            days: 0
+          };
+          const profit = parseNumber(item.profit);
+          const base = parseNumber(item.base_amount);
+          current.profit += Number.isFinite(profit) ? profit : 0;
+          current.base_amount += Number.isFinite(base) ? base : 0;
+          current.days += 1;
+          bucket.set(code, current);
+        });
+      });
+      const rows = Array.from(bucket.values()).map((item) => ({
+        ...item,
+        profit: Number(item.profit.toFixed(2)),
+        rate: item.base_amount > 0 ? item.profit / item.base_amount : null
+      }));
+      const sorted = earningsRankTab.value === 'loss'
+        ? rows.filter((item) => item.profit < 0).sort((a, b) => a.profit - b.profit)
+        : rows.filter((item) => item.profit > 0).sort((a, b) => b.profit - a.profit);
+      return sorted.slice(0, 5);
+    });
+
+    const earningsRankMaxValue = computed(() => (
+      Math.max(...earningsRankItems.value.map((item) => Math.abs(parseNumber(item.profit) || 0)), 1)
+    ));
+
+    const closeHoldingActionModal = () => {
+      holdingActionFund.value = null;
+    };
+
+    const openHoldingActionModal = (fund) => {
+      if (!fund) return;
+      holdingActionFund.value = fund;
+    };
+
+    const requireAuthForTradeAction = () => {
+      if (authUser.value) return true;
+      closeHoldingActionModal();
+      openAuthModal('login');
+      return false;
+    };
+
+    const openTradePlaceholder = (type) => {
+      if (!requireAuthForTradeAction()) return;
+      const labels = {
+        buy: '加仓',
+        sell: '减仓',
+        dca: '定投',
+        convert: '转换',
+        history: '交易记录'
+      };
+      alert(`${labels[type] || '交易'}功能后续接入`);
+    };
+
+    const transactions = createTransactionController({
+      authUser,
+      clientId,
+      openAuthModal,
+      closeHoldingActionModal,
+      refreshData: () => fetchData(),
+    });
+
+    const dca = createDcaController({
+      authUser,
+      clientId,
+      openAuthModal,
+      closeHoldingActionModal,
+      refreshData: () => fetchData(),
+    });
+
+    const conversion = createConversionController({
+      authUser,
+      clientId,
+      openAuthModal,
+      closeHoldingActionModal,
+      refreshData: () => fetchData(),
+    });
+
     const getDisplayEstimatedNav = (fund) => {
       if (!fund) return '-';
       if (fund.nav_confirmed) {
@@ -211,6 +888,17 @@ const app = createApp({
       await nextTick();
       renderPortfolioProfitChart(portfolioIntradayChartData.value);
       resizeDetailCharts();
+    };
+
+    const schedulePortfolioProfitRender = () => {
+      if (portfolioRenderTimer) {
+        clearTimeout(portfolioRenderTimer);
+        portfolioRenderTimer = null;
+      }
+      portfolioRenderTimer = setTimeout(() => {
+        portfolioRenderTimer = null;
+        renderPortfolioProfitVisuals();
+      }, 250);
     };
 
     const renderActiveHistoryChart = async () => {
@@ -376,7 +1064,8 @@ const app = createApp({
       });
     });
 
-    const fundListRenderKey = computed(() => `${activeGroupId.value}-${sortedFunds.value.map((item) => item.code).join(',')}`);
+    // 大户场景下避免在 key 里拼接所有 code（会造成巨大字符串分配与 diff 压力）
+    const fundListRenderKey = computed(() => `${activeGroupId.value}-${sortDir.value}-${fundListVersion.value}`);
     const sortIcon = computed(() => getSortIcon(sortDir.value));
 
     const marketNowText = computed(() => {
@@ -386,7 +1075,7 @@ const app = createApp({
       return `${hh}:${mm}:${ss}`;
     });
 
-    const marketStatus = computed(() => getMarketStatus(now.value));
+    const marketStatus = computed(() => getMarketStatus(now.value, isTodayTradingDay.value));
 
     const isPageVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible';
     const isTradingSessionOpen = () => marketStatus.value.className === 'market-open';
@@ -448,7 +1137,7 @@ const app = createApp({
     const portfolioSummaryCards = computed(() => ([
       {
         key: 'holding_amount',
-        label: activeGroupId.value === 'all' ? '总持仓市值' : '分组持仓市值',
+        label: '总持仓市值',
         value: formatCurrency(portfolioSummary.value.total_holding_amount),
         meta: '',
         valueClass: '',
@@ -490,7 +1179,8 @@ const app = createApp({
 
     const portfolioIntradayChartData = computed(() => {
       const labels = TRADING_MINUTES.slice();
-      const positionItems = filteredFunds.value.filter((item) => item?.has_position);
+      const labelSet = new Set(labels);
+      const positionItems = portfolioItems.value.filter((item) => item?.has_position);
       if (positionItems.length === 0) {
         return {
           labels,
@@ -522,14 +1212,14 @@ const app = createApp({
         Object.keys(cachedPoints).forEach((minute) => {
           const normalized = normalizeToStepMinute(minute);
           const nav = parseNumber(cachedPoints[minute]);
-          if (!normalized || !Number.isFinite(nav) || !labels.includes(normalized)) return;
+          if (!normalized || !Number.isFinite(nav) || !labelSet.has(normalized)) return;
           pointMap[normalized] = nav;
         });
 
         if (String(item.current_nav_source || '') === 'estimated') {
           const liveMinute = normalizeToStepMinute(toMinute(item.gztime) || nowMinute);
           const liveNav = parseNumber(item.current_nav);
-          if (liveMinute && Number.isFinite(liveNav) && labels.includes(liveMinute)) {
+          if (liveMinute && Number.isFinite(liveNav) && labelSet.has(liveMinute)) {
             pointMap[liveMinute] = liveNav;
           }
         }
@@ -591,6 +1281,12 @@ const app = createApp({
     const selectedFundGroupName = computed(() => (
       fundMetaMap.value[currentFundCode.value]?.group_name || '全部'
     ));
+
+    const quickAddGroupLabel = computed(() => {
+      if (!quickAddGroupId.value) return '不分组';
+      const matchedGroup = fundGroups.value.find((group) => String(group.id) === String(quickAddGroupId.value));
+      return matchedGroup?.name || '不分组';
+    });
 
     const intradayDataTag = computed(() => {
       const basic = detailBasicView.value || {};
@@ -675,7 +1371,7 @@ const app = createApp({
     };
 
     const refreshSnapshot = async () => {
-      const snapshot = await fetchUserFundsMeta(clientId);
+      const snapshot = await fetchUserFundsMeta(clientId.value);
       syncSnapshot(snapshot);
       return snapshot;
     };
@@ -689,6 +1385,7 @@ const app = createApp({
       funds.value = nextState.funds;
       portfolioItems.value = nextState.items;
       portfolioSummary.value = nextState.summary;
+      fundListVersion.value += 1;
       return nextState.items;
     };
 
@@ -721,7 +1418,7 @@ const app = createApp({
           loading.value = true;
         }
         try {
-          applyPortfolioPayload(await fetchPortfolio(clientId));
+          applyPortfolioPayload(await fetchPortfolio(clientId.value));
           lastUpdateTime.value = new Date().toLocaleTimeString();
           await renderPortfolioProfitVisuals();
         } catch (error) {
@@ -766,11 +1463,22 @@ const app = createApp({
       }
     };
 
+    const loadMarketStatus = async () => {
+      try {
+        const result = await fetchMarketStatus();
+        if (result?.success !== false && typeof result?.is_trading_day === 'boolean') {
+          isTodayTradingDay.value = result.is_trading_day;
+        }
+      } catch (error) {
+        console.warn('Failed to load market status:', error);
+      }
+    };
+
     const fetchData = async () => {
       loading.value = true;
       try {
         const legacyCodes = loadSavedCodes();
-        const quoteList = applyBootstrapPayload(await fetchDashboardBootstrap(clientId, legacyCodes));
+        const quoteList = applyBootstrapPayload(await fetchDashboardBootstrap(clientId.value, legacyCodes));
         lastUpdateTime.value = new Date().toLocaleTimeString();
 
         if (currentFundCode.value) {
@@ -802,7 +1510,7 @@ const app = createApp({
           await renderDetailVisuals();
         }
 
-        await renderPortfolioProfitVisuals();
+        schedulePortfolioProfitRender();
       } finally {
         loading.value = false;
       }
@@ -825,10 +1533,30 @@ const app = createApp({
       pendingFundCode
     });
 
+    const loadCurrentDetailTransactions = async () => {
+      if (!currentFundCode.value) return false;
+      const fund = funds.value.find((item) => item.code === currentFundCode.value) || {
+        code: currentFundCode.value,
+        name: currentFundName.value || detailBasicView.value?.name || currentFundCode.value
+      };
+      return await transactions.loadTransactionHistoryForFund(fund);
+    };
+
     const setDetailTab = async (tab) => {
       if (detailTab.value === tab) {
         if (tab === 'overview') await renderDetailVisuals();
         if (tab === 'history') await ensureHistoryRange(historyRangeDays.value);
+        if (tab === 'transactions') await loadCurrentDetailTransactions();
+        return;
+      }
+
+      if (tab === 'transactions') {
+        if (!currentFundCode.value) {
+          detailTab.value = tab;
+          return;
+        }
+        detailTab.value = tab;
+        await loadCurrentDetailTransactions();
         return;
       }
 
@@ -850,6 +1578,7 @@ const app = createApp({
       historyData.value = detailFund.value?.history || { success: false, data: [] };
       if (detailTab.value === 'overview') await renderDetailVisuals();
       if (detailTab.value === 'history') await ensureHistoryRange(30);
+      if (detailTab.value === 'transactions') await loadCurrentDetailTransactions();
     };
 
     const ensureHistoryRange = async (days) => {
@@ -890,7 +1619,7 @@ const app = createApp({
       if (incoming.length === 0) return;
 
       const groupId = selectedGroupId.value || '';
-      const results = await Promise.all(incoming.map((code) => saveUserFund(clientId, code, groupId)));
+      const results = await Promise.all(incoming.map((code) => saveUserFund(clientId.value, code, groupId)));
       const error = results.find((item) => item.error);
       if (error) {
         alert(error.error || '添加基金失败');
@@ -903,7 +1632,7 @@ const app = createApp({
 
     const addGroup = async () => {
       if (!newGroupName.value.trim()) return;
-      const result = await createFundGroup(clientId, newGroupName.value.trim());
+      const result = await createFundGroup(clientId.value, newGroupName.value.trim());
       if (result.error) {
         alert(result.error);
         return;
@@ -1011,12 +1740,24 @@ const app = createApp({
     const openQuickAddConfirm = () => {
       if (quickAddSelection.value.length === 0) return;
       quickAddGroupId.value = activeGroupId.value !== 'all' ? String(activeGroupId.value) : '';
+      quickAddGroupMenuOpen.value = false;
       quickAddConfirmOpen.value = true;
       quickSearchOpen.value = false;
     };
 
     const closeQuickAddConfirm = () => {
+      quickAddGroupMenuOpen.value = false;
       quickAddConfirmOpen.value = false;
+    };
+
+    const toggleQuickAddGroupMenu = () => {
+      if (!quickAddConfirmOpen.value) return;
+      quickAddGroupMenuOpen.value = !quickAddGroupMenuOpen.value;
+    };
+
+    const selectQuickAddGroup = (groupId) => {
+      quickAddGroupId.value = groupId ? String(groupId) : '';
+      quickAddGroupMenuOpen.value = false;
     };
 
     const confirmQuickAddFunds = async () => {
@@ -1025,7 +1766,7 @@ const app = createApp({
       try {
         const groupId = quickAddGroupId.value || '';
         const results = await Promise.all(
-          quickAddSelection.value.map((item) => saveUserFund(clientId, item.code, groupId))
+          quickAddSelection.value.map((item) => saveUserFund(clientId.value, item.code, groupId))
         );
         const error = results.find((item) => item.error);
         if (error) {
@@ -1036,6 +1777,7 @@ const app = createApp({
         quickSearchInput.value = '';
         quickSearchResults.value = [];
         quickSearchOpen.value = false;
+        quickAddGroupMenuOpen.value = false;
         quickAddConfirmOpen.value = false;
         await fetchData();
       } finally {
@@ -1120,7 +1862,7 @@ const app = createApp({
       if (!activeGroup.value || activeGroup.value.is_default) return;
       deletingGroup.value = true;
       groupActionError.value = '';
-      const result = await deleteFundGroup(clientId, activeGroup.value.id);
+      const result = await deleteFundGroup(clientId.value, activeGroup.value.id);
       if (result.error) {
         groupActionError.value = result.error;
         deletingGroup.value = false;
@@ -1165,7 +1907,7 @@ const app = createApp({
       }
       renamingGroup.value = true;
       groupActionError.value = '';
-      const result = await renameFundGroup(clientId, editingGroupId.value, nextName);
+      const result = await renameFundGroup(clientId.value, editingGroupId.value, nextName);
       if (result.error) {
         groupActionError.value = result.error;
         renamingGroup.value = false;
@@ -1179,7 +1921,7 @@ const app = createApp({
     };
 
     const changeFundGroup = async (code, groupId) => {
-      const result = await moveUserFundGroup(clientId, code, groupId);
+      const result = await moveUserFundGroup(clientId.value, code, groupId);
       if (result.error) {
         alert(result.error);
         return;
@@ -1207,6 +1949,7 @@ const app = createApp({
     const openPositionModal = (fund) => {
       if (!fund) return;
       ensureGroupModals();
+      closeHoldingActionModal();
       positionActionError.value = '';
       positionForm.value = {
         code: fund.code,
@@ -1227,7 +1970,7 @@ const app = createApp({
       savingPosition.value = true;
       positionActionError.value = '';
       try {
-        const result = await updateUserFundPosition(clientId, positionForm.value.code, {
+        const result = await updateUserFundPosition(clientId.value, positionForm.value.code, {
           holding_amount: positionForm.value.holding_amount,
           holding_profit: positionForm.value.holding_profit
         });
@@ -1245,6 +1988,7 @@ const app = createApp({
     const openDeleteFundModal = (fund) => {
       if (!fund?.code) return;
       ensureGroupModals();
+      closeHoldingActionModal();
       fundActionError.value = '';
       pendingDeleteFund.value = {
         code: fund.code,
@@ -1273,7 +2017,7 @@ const app = createApp({
       deletingFund.value = true;
       fundActionError.value = '';
       try {
-        await deleteUserFund(clientId, code);
+        await deleteUserFund(clientId.value, code);
       } catch {
         fundActionError.value = '删除基金失败';
         return;
@@ -1298,7 +2042,7 @@ const app = createApp({
       if (savedCodes.value.length === 0) return;
       clearingAllFunds.value = true;
       try {
-        await Promise.all(savedCodes.value.map((code) => deleteUserFund(clientId, code)));
+        await Promise.all(savedCodes.value.map((code) => deleteUserFund(clientId.value, code)));
         closeClearAllModal();
         await fetchData();
         funds.value = [];
@@ -1325,6 +2069,9 @@ const app = createApp({
       if (clockTimer) clearInterval(clockTimer);
       clockTimer = setInterval(() => {
         now.value = new Date();
+        if (now.value.getHours() === 0 && now.value.getMinutes() === 0 && now.value.getSeconds() < 2) {
+          loadMarketStatus();
+        }
       }, 1000);
     };
 
@@ -1336,6 +2083,8 @@ const app = createApp({
     onMounted(() => {
       initTheme();
       checkReleaseNotice();
+      loadAuthState();
+      loadMarketStatus();
       fetchData();
       nextTick(() => {
         ensureGroupModals();
@@ -1350,6 +2099,9 @@ const app = createApp({
         if (!(target instanceof Element)) return;
         if (!target.closest('.topbar-fund-search')) {
           quickSearchOpen.value = false;
+        }
+        if (!target.closest('.user-menu')) {
+          authMenuOpen.value = false;
         }
         if (!target.closest('.group-panel') && !editingGroupId.value) {
           mobileGroupActionsId.value = '';
@@ -1366,6 +2118,7 @@ const app = createApp({
         isMobileView.value = isMobileViewport();
         if (!isMobileView.value) {
           summaryExpanded.value = true;
+          mobileActiveTab.value = 'home';
           editingGroupId.value = '';
           editingGroupName.value = '';
           mobileGroupActionsId.value = '';
@@ -1381,9 +2134,9 @@ const app = createApp({
     });
 
     watch(
-      () => [portfolioIntradayChartData.value, activeGroupId.value, theme.value],
+      () => [portfolioIntradayChartData.value, theme.value],
       () => {
-        renderPortfolioProfitVisuals();
+        schedulePortfolioProfitRender();
       }
     );
 
@@ -1391,6 +2144,10 @@ const app = createApp({
       timers.stop();
       stopClockTimer();
       clearQuickSearchTimer();
+      if (portfolioRenderTimer) {
+        clearTimeout(portfolioRenderTimer);
+        portfolioRenderTimer = null;
+      }
       disposeCharts();
       if (resizeHandler) {
         window.removeEventListener('resize', resizeHandler);
@@ -1426,6 +2183,40 @@ const app = createApp({
       selectedGroupId,
       newGroupName,
       savedCodes,
+      clientId,
+      authUser,
+      authMenuOpen,
+      authModalOpen,
+      authMode,
+      authLoading,
+      authError,
+      authForm,
+      mobileActiveTab,
+      earningsViewOpen,
+      earningsLoading,
+      earningsError,
+      earningsMode,
+      earningsViewMode,
+      earningsLoaded,
+      earningsSelectedDate,
+      earningsSelectedMonth,
+      earningsSelectedYear,
+      earningsRankTab,
+      dailyEarnings,
+      earningsCalendarTitle,
+      earningsSummaryTitle,
+      earningsDisplaySummaryTitle,
+      earningsDisplaySummary,
+      earningsSummaryBadge,
+      earningsBoardTitle,
+      earningsCalendarDays,
+      earningsMonthCells,
+      earningsYearCells,
+      earningsTodayLiveDay,
+      earningsMergedDays,
+      earningsRankItems,
+      earningsRankMaxValue,
+      accountDisplayName,
       userFunds,
       fundGroups,
       activeGroupId,
@@ -1476,16 +2267,19 @@ const app = createApp({
       quickSearchLoading,
       quickSearchError,
       quickSearchOpen,
-      quickAddSelection,
-      quickAddConfirmOpen,
-      quickAddGroupId,
-      quickAddSaving,
-      quickAddButtonText,
+        quickAddSelection,
+        quickAddConfirmOpen,
+        quickAddGroupId,
+        quickAddGroupMenuOpen,
+        quickAddGroupLabel,
+        quickAddSaving,
+        quickAddButtonText,
       summaryExpanded,
       isMobileView,
       deletingFund,
       fundActionError,
       pendingDeleteFund,
+      holdingActionFund,
       clearingAllFunds,
       savingPosition,
       positionActionError,
@@ -1504,6 +2298,127 @@ const app = createApp({
       currentPortfolioItem,
       detailBasicView,
       toggleTheme,
+      toggleAuthMenu,
+      switchMobileTab,
+      openAuthModal,
+      closeAuthModal,
+      switchAuthMode,
+      submitAuthForm,
+      logoutAccount,
+      openMyEarnings: openMyEarningsPage,
+      closeMyEarnings,
+      loadDailyEarnings,
+      setEarningsMode,
+      setEarningsViewMode,
+      selectEarningsDate,
+      selectEarningsMonth,
+      selectEarningsYear,
+      setEarningsRankTab,
+      shiftEarningsPeriod,
+      shiftEarningsMonth,
+      formatEarningsValue,
+      earningsValueClass,
+      openHoldingActionModal,
+      closeHoldingActionModal,
+      openTradePlaceholder,
+      openConversionModal: conversion.openConversionModal,
+      closeConversionModal: conversion.closeConversionModal,
+      conversionModalOpen: conversion.conversionModalOpen,
+      conversionConfirmOpen: conversion.conversionConfirmOpen,
+      conversionFund: conversion.conversionFund,
+      conversionTarget: conversion.conversionTarget,
+      conversionForm: conversion.conversionForm,
+      conversionError: conversion.conversionError,
+      conversionSaving: conversion.conversionSaving,
+      conversionPreviewLoading: conversion.conversionPreviewLoading,
+      conversionSearchKeyword: conversion.conversionSearchKeyword,
+      conversionSearchResults: conversion.conversionSearchResults,
+      conversionSearchLoading: conversion.conversionSearchLoading,
+      conversionDatePickerOpen: conversion.conversionDatePickerOpen,
+      setConvertAllShares: conversion.setConvertAllShares,
+      searchConversionTargets: conversion.searchConversionTargets,
+      selectConversionTarget: conversion.selectConversionTarget,
+      openConversionConfirm: conversion.openConversionConfirm,
+      closeConversionConfirm: conversion.closeConversionConfirm,
+      submitConversion: conversion.submitConversion,
+      conversionConfirmRows: conversion.conversionConfirmRows,
+      formatConversionMoney: conversion.formatConversionMoney,
+      formatConversionShares: conversion.formatConversionShares,
+      formatAvailableConversionShares: conversion.formatAvailableConversionShares,
+      conversionCalendarTitle: conversion.conversionCalendarTitle,
+      getConversionCalendarDays: conversion.getConversionCalendarDays,
+      toggleConversionDatePicker: conversion.toggleConversionDatePicker,
+      closeConversionDatePicker: conversion.closeConversionDatePicker,
+      shiftConversionCalendarMonth: conversion.shiftConversionCalendarMonth,
+      selectConversionDate: conversion.selectConversionDate,
+      dcaModalOpen: dca.dcaModalOpen,
+      dcaFund: dca.dcaFund,
+      dcaForm: dca.dcaForm,
+      dcaPlan: dca.dcaPlan,
+      dcaLoading: dca.dcaLoading,
+      dcaSaving: dca.dcaSaving,
+      dcaDeleting: dca.dcaDeleting,
+      dcaError: dca.dcaError,
+      dcaFieldErrors: dca.dcaFieldErrors,
+      dcaDatePickerOpen: dca.dcaDatePickerOpen,
+      dcaDatePickerPlacement: dca.dcaDatePickerPlacement,
+      dcaCycleOptions: dca.dcaCycleOptions,
+      dcaMonthlyDays: dca.dcaMonthlyDays,
+      dcaWeekdayOptions: dca.dcaWeekdayOptions,
+      dcaNextRunText: dca.dcaNextRunText,
+      dcaCycleText: dca.dcaCycleText,
+      openDcaModal: dca.openDcaModal,
+      closeDcaModal: dca.closeDcaModal,
+      submitDcaPlan: dca.submitDcaPlan,
+      removeDcaPlan: dca.removeDcaPlan,
+      clearDcaFieldError: dca.clearDcaFieldError,
+      formatDcaDate: dca.formatDcaDate,
+      dcaCalendarTitle: dca.dcaCalendarTitle,
+      getDcaCalendarDays: dca.getDcaCalendarDays,
+      toggleDcaDatePicker: dca.toggleDcaDatePicker,
+      closeDcaDatePicker: dca.closeDcaDatePicker,
+      shiftDcaCalendarMonth: dca.shiftDcaCalendarMonth,
+      selectDcaDate: dca.selectDcaDate,
+      transactionModalOpen: transactions.transactionModalOpen,
+      transactionMode: transactions.transactionMode,
+      transactionFund: transactions.transactionFund,
+      transactionForm: transactions.transactionForm,
+      transactionSaving: transactions.transactionSaving,
+      transactionError: transactions.transactionError,
+      transactionHistoryOpen: transactions.transactionHistoryOpen,
+      transactionConfirmOpen: transactions.transactionConfirmOpen,
+      transactionConfirmError: transactions.transactionConfirmError,
+      transactionPreviewLoading: transactions.transactionPreviewLoading,
+      transactionHistoryFund: transactions.transactionHistoryFund,
+      transactionHistoryLoading: transactions.transactionHistoryLoading,
+      transactionHistoryError: transactions.transactionHistoryError,
+      transactionHistoryItems: transactions.transactionHistoryItems,
+      deletingTransactionId: transactions.deletingTransactionId,
+      transactionDatePickerOpen: transactions.transactionDatePickerOpen,
+      openTransactionModal: transactions.openTransactionModal,
+      closeTransactionModal: transactions.closeTransactionModal,
+      closeTransactionConfirm: transactions.closeTransactionConfirm,
+      openTransactionConfirm: transactions.openTransactionConfirm,
+      submitTransaction: transactions.submitTransaction,
+      openTransactionHistory: transactions.openTransactionHistory,
+      loadTransactionHistoryForFund: transactions.loadTransactionHistoryForFund,
+      closeTransactionHistory: transactions.closeTransactionHistory,
+      removeTransaction: transactions.removeTransaction,
+      transactionPreview: transactions.transactionPreview,
+      transactionConfirmTitle: transactions.transactionConfirmTitle,
+      transactionConfirmActionText: transactions.transactionConfirmActionText,
+      transactionConfirmRows: transactions.transactionConfirmRows,
+      formatTransactionDate: transactions.formatTransactionDate,
+      transactionCalendarTitle: transactions.transactionCalendarTitle,
+      getTransactionCalendarDays: transactions.getTransactionCalendarDays,
+      toggleTransactionDatePicker: transactions.toggleTransactionDatePicker,
+      closeTransactionDatePicker: transactions.closeTransactionDatePicker,
+      shiftTransactionCalendarMonth: transactions.shiftTransactionCalendarMonth,
+      selectTransactionDate: transactions.selectTransactionDate,
+      formatTransactionMoney: transactions.formatTransactionMoney,
+      formatTransactionShares: transactions.formatTransactionShares,
+      formatTransactionNav: transactions.formatTransactionNav,
+      transactionTypeLabel: transactions.transactionTypeLabel,
       confirmReleaseNotice,
       setDetailTab,
       ensureHistoryRange,
@@ -1519,10 +2434,12 @@ const app = createApp({
       handleQuickSearchFocus,
       focusQuickSearchFirst,
       toggleQuickAddSelection,
-      removeQuickAddSelection,
-      openQuickAddConfirm,
-      closeQuickAddConfirm,
-      confirmQuickAddFunds,
+        removeQuickAddSelection,
+        openQuickAddConfirm,
+        closeQuickAddConfirm,
+        toggleQuickAddGroupMenu,
+        selectQuickAddGroup,
+        confirmQuickAddFunds,
       openRenameGroupModal,
       closeRenameGroupModal,
       confirmRenameGroup,

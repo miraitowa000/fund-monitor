@@ -48,12 +48,23 @@ DB_USER=root
 DB_PASSWORD=replace-with-production-password
 DB_NAME=fund_monitor_production
 DB_CHARSET=utf8mb4
+REDIS_URL=redis://redis:6379/0
+ENABLE_PERF_DEBUG_METRICS=0
+PERF_DEBUG_TOKEN=change-me
+FUNDS_MAX_WORKERS=20
+BG_REFRESH_MAX_WORKERS=6
+DETAIL_MAX_WORKERS=4
+DETAIL_PART_MAX_WORKERS=4
+PORTFOLIO_REFRESH_MAX_WORKERS=2
+PORTFOLIO_REFRESH_MAX_CONCURRENCY=2
 ```
 
 说明：
 
 - `APP_ENV` 必须是 `production`
 - `DB_NAME` 必须是你已创建好的数据库名
+- `REDIS_URL` 保持 `redis://redis:6379/0`，表示连接 `docker compose` 内置的 Redis 服务
+- 线程池并发参数可按机器性能灵活调整，建议先使用默认示例值
 - `.env.production` 已加入 `.gitignore`，不要提交到仓库
 
 ## 二、首次部署

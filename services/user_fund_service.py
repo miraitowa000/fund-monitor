@@ -5,7 +5,7 @@ from sqlalchemy.orm import joinedload
 
 from core.db import Base, engine, session_scope
 from core.perf_metrics import increment_metric
-from core.models import FundGroup, User, UserFund
+from core.models import FundDcaPlan, FundGroup, User, UserFund
 from services.dashboard_cache_service import invalidate_dashboard_bootstrap
 from services.fund_basic_service import get_fund_estimate
 from services.portfolio_cache_service import invalidate_user_portfolio
@@ -18,8 +18,55 @@ from services.snapshot_cache_service import (
 
 def init_database():
     Base.metadata.create_all(bind=engine)
+    _ensure_users_auth_columns()
     _ensure_user_funds_position_columns()
+    _ensure_fund_transactions_columns()
+    _ensure_fund_dca_plan_columns()
+    _ensure_fund_conversion_columns()
     _migrate_default_groups_to_ungrouped()
+
+
+def _ensure_users_auth_columns():
+    inspector = inspect(engine)
+    if 'users' not in inspector.get_table_names():
+        return
+
+    columns = inspector.get_columns('users')
+    existing_columns = {column['name'] for column in columns}
+    expected_columns = {
+        'password_hash': 'ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL',
+        'last_login_at': 'ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL',
+    }
+
+    missing_columns = [
+        ddl for name, ddl in expected_columns.items()
+        if name not in existing_columns
+    ]
+
+    with engine.begin() as connection:
+        for ddl in missing_columns:
+            connection.execute(text(ddl))
+        indexes = inspector.get_indexes('fund_transactions')
+        has_batch_unique_index = any(
+            index.get('name') == 'uq_fund_transactions_user_batch_type_code'
+            for index in indexes
+        )
+        if not has_batch_unique_index:
+            connection.execute(text(
+                'CREATE UNIQUE INDEX uq_fund_transactions_user_batch_type_code '
+                'ON fund_transactions (user_id, batch_id, transaction_type, fund_code)'
+            ))
+        username_column = next((column for column in columns if column['name'] == 'username'), None)
+        username_length = getattr(username_column.get('type'), 'length', None) if username_column else None
+        if username_column and username_length and username_length < 128:
+            connection.execute(text('ALTER TABLE users MODIFY COLUMN username VARCHAR(128) NULL'))
+
+        has_username_index = any(
+            index.get('column_names') == ['username']
+            for index in inspector.get_indexes('users')
+        )
+        if not has_username_index:
+            connection.execute(text('CREATE INDEX idx_users_username ON users (username)'))
 
 
 def _ensure_user_funds_position_columns():
@@ -37,6 +84,89 @@ def _ensure_user_funds_position_columns():
         'snapshot_nav': 'ALTER TABLE user_funds ADD COLUMN snapshot_nav DOUBLE NULL',
         'snapshot_date': 'ALTER TABLE user_funds ADD COLUMN snapshot_date VARCHAR(10) NULL',
         'position_updated_at': 'ALTER TABLE user_funds ADD COLUMN position_updated_at DATETIME NULL',
+    }
+
+    missing_columns = [
+        ddl for name, ddl in expected_columns.items()
+        if name not in existing_columns
+    ]
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for ddl in missing_columns:
+            connection.execute(text(ddl))
+
+
+def _ensure_fund_transactions_columns():
+    inspector = inspect(engine)
+    if 'fund_transactions' not in inspector.get_table_names():
+        return
+
+    existing_columns = {column['name'] for column in inspector.get_columns('fund_transactions')}
+    expected_columns = {
+        'batch_id': 'ALTER TABLE fund_transactions ADD COLUMN batch_id VARCHAR(64) NULL',
+        'conversion_id': 'ALTER TABLE fund_transactions ADD COLUMN conversion_id INTEGER NULL',
+        'related_fund_code': 'ALTER TABLE fund_transactions ADD COLUMN related_fund_code VARCHAR(6) NULL',
+        'submitted_date': 'ALTER TABLE fund_transactions ADD COLUMN submitted_date VARCHAR(10) NULL',
+        'time_slot': 'ALTER TABLE fund_transactions ADD COLUMN time_slot VARCHAR(20) NULL',
+        'nav_date': 'ALTER TABLE fund_transactions ADD COLUMN nav_date VARCHAR(10) NULL',
+        'confirm_date': 'ALTER TABLE fund_transactions ADD COLUMN confirm_date VARCHAR(10) NULL',
+        'fee_rate': 'ALTER TABLE fund_transactions ADD COLUMN fee_rate DOUBLE NULL',
+        'realized_profit': 'ALTER TABLE fund_transactions ADD COLUMN realized_profit DOUBLE NULL',
+        'is_dca': 'ALTER TABLE fund_transactions ADD COLUMN is_dca BOOL NOT NULL DEFAULT 0',
+        'note': 'ALTER TABLE fund_transactions ADD COLUMN note VARCHAR(255) NULL',
+    }
+
+    missing_columns = [
+        ddl for name, ddl in expected_columns.items()
+        if name not in existing_columns
+    ]
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for ddl in missing_columns:
+            connection.execute(text(ddl))
+
+
+def _ensure_fund_conversion_columns():
+    inspector = inspect(engine)
+    if 'fund_conversions' not in inspector.get_table_names():
+        return
+
+    existing_columns = {column['name'] for column in inspector.get_columns('fund_conversions')}
+    expected_columns = {
+        'from_fee_rate': 'ALTER TABLE fund_conversions ADD COLUMN from_fee_rate DOUBLE NOT NULL DEFAULT 0',
+        'from_fee': 'ALTER TABLE fund_conversions ADD COLUMN from_fee DOUBLE NOT NULL DEFAULT 0',
+        'to_fee_rate': 'ALTER TABLE fund_conversions ADD COLUMN to_fee_rate DOUBLE NOT NULL DEFAULT 0',
+        'to_fee': 'ALTER TABLE fund_conversions ADD COLUMN to_fee DOUBLE NOT NULL DEFAULT 0',
+        'supplement_fee_rate': 'ALTER TABLE fund_conversions ADD COLUMN supplement_fee_rate DOUBLE NOT NULL DEFAULT 0',
+        'supplement_fee': 'ALTER TABLE fund_conversions ADD COLUMN supplement_fee DOUBLE NOT NULL DEFAULT 0',
+    }
+    missing_columns = [
+        ddl for name, ddl in expected_columns.items()
+        if name not in existing_columns
+    ]
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for ddl in missing_columns:
+            connection.execute(text(ddl))
+
+
+def _ensure_fund_dca_plan_columns():
+    inspector = inspect(engine)
+    if 'fund_dca_plans' not in inspector.get_table_names():
+        return
+
+    existing_columns = {column['name'] for column in inspector.get_columns('fund_dca_plans')}
+    expected_columns = {
+        'last_date': 'ALTER TABLE fund_dca_plans ADD COLUMN last_date VARCHAR(10) NULL',
+        'weekly_day': 'ALTER TABLE fund_dca_plans ADD COLUMN weekly_day INTEGER NULL',
+        'monthly_day': 'ALTER TABLE fund_dca_plans ADD COLUMN monthly_day INTEGER NULL',
+        'enabled': 'ALTER TABLE fund_dca_plans ADD COLUMN enabled BOOL NOT NULL DEFAULT 1',
     }
 
     missing_columns = [
@@ -113,7 +243,7 @@ def _normalize_position_payload(fund):
     }
 
 
-def _serialize_user_fund(fund):
+def _serialize_user_fund(fund, dca_enabled=False):
     group_name = ''
     if fund.group:
         group_name = _normalize_group_name(fund.group)
@@ -122,6 +252,7 @@ def _serialize_user_fund(fund):
         'group_id': fund.group_id,
         'group_name': group_name,
         'sort_order': fund.sort_order,
+        'dca_enabled': bool(dca_enabled),
         **_normalize_position_payload(fund),
     }
 
@@ -210,7 +341,15 @@ def _list_user_funds_for_session(session, user_id):
         .options(joinedload(UserFund.group))
         .order_by(UserFund.sort_order.asc(), UserFund.id.asc())
     ).scalars().all()
-    return [_serialize_user_fund(fund) for fund in funds]
+    dca_enabled_codes = {
+        code for code, in session.execute(
+            select(FundDcaPlan.fund_code).where(
+                FundDcaPlan.user_id == user_id,
+                FundDcaPlan.enabled.is_(True),
+            )
+        ).all()
+    }
+    return [_serialize_user_fund(fund, fund.fund_code in dca_enabled_codes) for fund in funds]
 
 
 def list_groups_with_counts(client_id):

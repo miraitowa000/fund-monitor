@@ -52,7 +52,8 @@ export const normalizeToStepMinute = (minute) => {
   const bucket = Math.floor((rawH * 60 + rawM) / INTRADAY_STEP_MINUTES) * INTRADAY_STEP_MINUTES;
   const h = Math.floor(bucket / 60);
   const mm = bucket % 60;
-  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  const normalized = `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  return TRADING_MINUTES[minuteToIndex(normalized)] || normalized;
 };
 
 export const readIntradayCache = () => {
@@ -77,16 +78,31 @@ export const saveFundSnapshotsToCache = (fundList) => {
     if (d !== today) delete cache[d];
   });
   cache[today] = cache[today] || {};
+  const todayMap = cache[today];
 
-  fundList.forEach((f) => {
+  // 大户保护：限制写入规模，避免 localStorage JSON 过大导致卡顿/阻塞
+  const maxFundsToStore = 200;
+  const funds = fundList.slice(0, maxFundsToStore);
+  const minute = toMinute(funds[0]?.gztime) || formatMinuteNow();
+  let changed = false;
+
+  funds.forEach((f) => {
     if (!f || !f.code) return;
     const price = parseFloat(f.gsz);
     if (!Number.isFinite(price)) return;
-    const minute = toMinute(f.gztime) || formatMinuteNow();
-    const codeMap = cache[today][f.code] || {};
-    codeMap[minute] = price;
-    cache[today][f.code] = codeMap;
+    const codeMinute = toMinute(f.gztime) || minute;
+    const codeMap = todayMap[f.code] || {};
+    const prev = codeMap[codeMinute];
+    if (prev === price) {
+      todayMap[f.code] = codeMap;
+      return;
+    }
+    codeMap[codeMinute] = price;
+    todayMap[f.code] = codeMap;
+    changed = true;
   });
 
-  writeIntradayCache(cache);
+  if (changed) {
+    writeIntradayCache(cache);
+  }
 };

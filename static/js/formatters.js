@@ -20,15 +20,26 @@ export const clearSavedCodes = () => {
   localStorage.removeItem(SAVED_CODES_KEY);
 };
 
+export const createClientId = () => `web_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+
+export const saveClientId = (clientId) => {
+  const normalized = String(clientId || '').trim();
+  if (!normalized) return '';
+  try {
+    localStorage.setItem(CLIENT_ID_KEY, normalized);
+  } catch {}
+  return normalized;
+};
+
 export const loadClientId = () => {
   try {
     const existing = localStorage.getItem(CLIENT_ID_KEY);
     if (existing) return existing;
-    const created = `web_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
-    localStorage.setItem(CLIENT_ID_KEY, created);
+    const created = createClientId();
+    saveClientId(created);
     return created;
   } catch {
-    return `web_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+    return createClientId();
   }
 };
 
@@ -64,7 +75,8 @@ export const getSortIcon = (sortDir) => {
   return '↕';
 };
 
-export const getMarketStatus = (date) => {
+export const getMarketStatus = (date, isTradingDay = true) => {
+  if (isTradingDay === false) return { text: '\u975e\u4ea4\u6613\u65e5', className: 'market-nontrading' };
   const minutes = date.getHours() * 60 + date.getMinutes();
   if (minutes >= 540 && minutes < 570) return { text: '集合竞价', className: 'market-preopen' };
   if (minutes >= 570 && minutes < 690) return { text: '交易中', className: 'market-open' };

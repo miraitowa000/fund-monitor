@@ -17,4 +17,4 @@ COPY . .
 # 暴露端口
 EXPOSE 5000
 
-CMD ["gunicorn", "-w", "2", "--threads", "16", "--timeout", "90", "--graceful-timeout", "90", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["gunicorn", "-w", "2", "--threads", "16", "--timeout", "90", "--graceful-timeout", "90", "--keep-alive", "2", "--max-requests", "800", "--max-requests-jitter", "80", "--access-logfile", "-", "--access-logformat", "%(h)s %(r)s %(s)s %(L)s", "-b", "0.0.0.0:5000", "app:app"]

@@ -74,6 +74,7 @@ def _build_position_item(meta, quote, total_holding_amount=0.0):
         'name': (quote or {}).get('name') or meta.get('code'),
         'group_id': meta.get('group_id'),
         'group_name': meta.get('group_name') or '',
+        'dca_enabled': bool(meta.get('dca_enabled')),
         'has_position': bool(meta.get('has_position')),
         'current_nav': _round_nav(current_nav) if current_nav is not None else None,
         'current_nav_date': str(current_nav_date or '').split(' ')[0] or None,
@@ -136,10 +137,10 @@ def _build_position_item(meta, quote, total_holding_amount=0.0):
     return item
 
 
-def _build_user_portfolio_payload(client_id, user_funds=None):
+def _build_user_portfolio_payload(client_id, user_funds=None, request_timeout=15):
     user_funds = user_funds if user_funds is not None else list_user_funds(client_id)
     codes = [item['code'] for item in user_funds]
-    quotes = fetch_funds_parallel(codes) if codes else []
+    quotes = fetch_funds_parallel(codes, request_timeout=request_timeout) if codes else []
     quote_map = _build_quote_map(quotes)
 
     items = []
@@ -198,7 +199,7 @@ def _build_user_portfolio_payload(client_id, user_funds=None):
     }
 
 
-def get_user_portfolio(client_id, force_refresh=False, user_funds=None):
+def get_user_portfolio(client_id, force_refresh=False, user_funds=None, request_timeout=15):
     if not force_refresh:
         cached = get_cached_user_portfolio(client_id)
         if cached:
@@ -209,7 +210,7 @@ def get_user_portfolio(client_id, force_refresh=False, user_funds=None):
         increment_metric('cache.portfolio.force_refresh')
 
     try:
-        payload = _build_user_portfolio_payload(client_id, user_funds=user_funds)
+        payload = _build_user_portfolio_payload(client_id, user_funds=user_funds, request_timeout=request_timeout)
         set_user_portfolio(client_id, payload)
         return payload
     except Exception:

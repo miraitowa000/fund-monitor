@@ -22,7 +22,8 @@ const attachGroupMeta = (quoteList, fundMetaMap) => quoteList.map((item) => ({
 
 export const buildPortfolioViewState = (portfolio, fundMetaMap, currentSummary) => {
   const normalizedItems = normalizePortfolioItems(portfolio?.items);
-  saveFundSnapshotsToCache(normalizedItems);
+  // 盘中收益曲线只依赖持仓基金，避免在大户场景下把全部基金写入 localStorage
+  saveFundSnapshotsToCache(normalizedItems.filter((item) => item?.has_position));
 
   return {
     items: normalizedItems,

@@ -46,6 +46,11 @@ export const fetchDashboardBootstrap = async (clientId, codes = []) => {
   return await response.json();
 };
 
+export const fetchMarketStatus = async () => {
+  const response = await fetch('/api/market/status');
+  return await response.json();
+};
+
 export const createFundGroup = async (clientId, name) => {
   const response = await fetch('/api/user/groups', {
     method: 'POST',
@@ -109,6 +114,117 @@ export const updateUserFundPosition = async (clientId, code, payload) => {
 
 export const fetchPortfolio = async (clientId) => {
   const response = await fetch('/api/user/portfolio', {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const fetchDailyEarnings = async (clientId, start, end) => {
+  const params = new URLSearchParams();
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  const query = params.toString();
+  const response = await fetch(`/api/user/earnings/daily${query ? `?${query}` : ''}`, {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const fetchAuthMe = async (clientId) => {
+  const response = await fetch('/api/auth/me', {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const registerAccount = async (clientId, account, password) => {
+  const response = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ account, password })
+  });
+  return await response.json();
+};
+
+export const loginAccount = async (account, password) => {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account, password })
+  });
+  return await response.json();
+};
+
+export const fetchFundTransactions = async (clientId, code) => {
+  const response = await fetch(`/api/user/funds/${code}/transactions`, {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const createFundTransaction = async (clientId, code, payload) => {
+  const response = await fetch(`/api/user/funds/${code}/transactions`, {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const previewFundTransaction = async (clientId, code, payload) => {
+  const response = await fetch(`/api/user/funds/${code}/transactions/preview`, {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const deleteFundTransaction = async (clientId, transactionId) => {
+  const response = await fetch(`/api/user/transactions/${transactionId}`, {
+    method: 'DELETE',
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const previewFundConversion = async (clientId, payload) => {
+  const response = await fetch('/api/user/fund-conversions/preview', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const createFundConversion = async (clientId, payload) => {
+  const response = await fetch('/api/user/fund-conversions', {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const fetchDcaPlan = async (clientId, code) => {
+  const response = await fetch(`/api/user/funds/${code}/dca-plan`, {
+    headers: withClientHeaders(clientId)
+  });
+  return await response.json();
+};
+
+export const saveDcaPlan = async (clientId, code, payload) => {
+  const response = await fetch(`/api/user/funds/${code}/dca-plan`, {
+    method: 'POST',
+    headers: withClientHeaders(clientId, { 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload)
+  });
+  return await response.json();
+};
+
+export const deleteDcaPlan = async (clientId, code) => {
+  const response = await fetch(`/api/user/funds/${code}/dca-plan`, {
+    method: 'DELETE',
     headers: withClientHeaders(clientId)
   });
   return await response.json();

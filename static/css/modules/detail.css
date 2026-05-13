@@ -179,8 +179,13 @@ body[data-theme='dark'] #app .chart-surface {
   padding: 20px;
   text-align: center;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 700;
   line-height: 1.7;
+}
+
+body[data-theme='dark'] #app .chart-empty-state {
+  color: #c6d3e6;
 }
 
 .holding-preview {
@@ -749,5 +754,62 @@ body[data-theme='dark'] #app .group-action-modal .btn-close {
 
 .theme-switch input:checked + .theme-switch__track {
   background: rgba(22, 163, 74, 0.42);
+}
+
+.detail-transaction-refresh {
+  height: 32px;
+  width: auto;
+  min-width: 64px;
+  justify-self: end;
+  padding: 0 14px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.detail-transaction-list {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-transaction-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-panel-soft);
+}
+
+.detail-transaction-item__main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.detail-transaction-item__main strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.detail-transaction-item__main strong.up {
+  color: var(--danger-color);
+}
+
+.detail-transaction-item__main strong.down {
+  color: var(--success-color);
+}
+
+.detail-transaction-item__main span,
+.detail-transaction-item__metrics {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.detail-transaction-item__metrics {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
 }
 
