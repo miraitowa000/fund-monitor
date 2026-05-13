@@ -1,0 +1,187 @@
+.conversion-modal {
+  max-width: 560px;
+}
+
+.conversion-modal .conversion-form {
+  min-height: 0;
+}
+
+.conversion-form small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.conversion-input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.transaction-form .conversion-input-action .conversion-all-btn {
+  min-width: 64px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel-soft);
+  color: var(--text-primary);
+  font-weight: 800;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.transaction-form .conversion-input-action .conversion-all-btn:hover {
+  border-color: rgba(22, 119, 255, 0.6);
+  color: var(--brand-color);
+}
+
+.conversion-search-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.conversion-search-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-panel-soft);
+  color: var(--text-primary);
+  padding: 0 12px;
+  text-align: left;
+}
+
+.conversion-search-list span,
+.conversion-selected-target {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.conversion-selected-target {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
+  font-weight: 800;
+}
+
+body[data-theme='dark'] #app .conversion-selected-target {
+  color: #7dd3fc;
+}
+
+.conversion-field-label {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.conversion-field-label em {
+  color: var(--danger-color);
+  font-style: normal;
+}
+
+.conversion-picker-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.conversion-time-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.conversion-time-segment button {
+  height: 42px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-weight: 800;
+}
+
+.conversion-time-segment button.active {
+  border-color: rgba(22, 119, 255, 0.75);
+  background: linear-gradient(135deg, #2f80ff, var(--brand-color));
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(22, 119, 255, 0.18);
+}
+
+.conversion-confirm-modal .transaction-confirm-card {
+  border-color: var(--border-color);
+  background: var(--bg-panel-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+body:not([data-theme='dark']) #app .conversion-confirm-modal .transaction-confirm-card {
+  background: #fff;
+  border-color: #e2e8f0;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+body[data-theme='dark'] #app .conversion-confirm-modal .transaction-confirm-card {
+  background: rgba(15, 23, 42, 0.34);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.conversion-confirm-modal .transaction-confirm-row {
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.conversion-confirm-modal .transaction-confirm-row:last-child {
+  border-bottom: none;
+}
+
+@media (max-width: 576px) {
+  .conversion-modal {
+    width: min(448px, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    padding: 14px;
+    overflow: hidden;
+  }
+
+  .conversion-modal .transaction-modal__header {
+    margin-bottom: 12px;
+  }
+
+  .conversion-modal .conversion-form {
+    gap: 10px;
+    overflow-y: auto;
+    padding-right: 2px;
+    padding-bottom: 4px;
+  }
+
+  .conversion-modal .transaction-form label {
+    gap: 6px;
+  }
+
+  .conversion-modal .transaction-form input,
+  .conversion-modal .transaction-date-field,
+  .conversion-time-segment button {
+    height: 40px;
+  }
+
+  .conversion-modal .transaction-form__row {
+    gap: 10px;
+  }
+
+  .conversion-modal .transaction-form__actions {
+    position: sticky;
+    bottom: 0;
+    margin: 4px -2px -4px;
+    padding-top: 8px;
+    background: var(--bg-panel);
+    z-index: 2;
+  }
+
+  .conversion-modal .transaction-form__cancel,
+  .conversion-modal .transaction-form__submit {
+    height: 40px;
+  }
+}

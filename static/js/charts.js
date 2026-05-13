@@ -81,13 +81,15 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
       : null;
     const fallbackValue = parseFloat(fallbackPoint?.value);
     if (!Number.isFinite(fallbackValue)) return null;
-    const values = labels.map(() => Number(fallbackValue.toFixed(4)));
+    const values = new Array(labels.length).fill(null);
     const currentIdx = Math.max(minuteToIndex(formatMinuteNow()), 0);
-    for (let i = currentIdx + 1; i < values.length; i += 1) {
-      values[i] = null;
-    }
-    return { labels, values, currentIdx };
+    values[currentIdx] = Number(fallbackValue.toFixed(4));
+    return { labels, values, currentIdx, knownCount: 1, knownIndexes: new Set([Math.min(currentIdx, labels.length - 1)]), sparse: false };
   }
+
+  const knownSpan = known.length > 1 ? known[known.length - 1].idx - known[0].idx : 0;
+  const knownIndexes = new Set(known.map((point) => point.idx));
+  const sparseSeries = known.length < 4 || knownSpan < 6;
 
   const values = new Array(labels.length).fill(null);
   known.forEach((point) => {
@@ -96,10 +98,18 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
 
   const nowMinute = formatMinuteNow();
   let currentIdx = minuteToIndex(nowMinute);
+
   let lastKnown = null;
   for (let i = 0; i <= currentIdx; i += 1) {
     if (Number.isFinite(values[i])) lastKnown = values[i];
     else if (lastKnown !== null) values[i] = lastKnown;
+  }
+
+  if (sparseSeries) {
+    const firstKnown = known[0];
+    for (let i = 0; i < firstKnown.idx; i += 1) {
+      values[i] = firstKnown.value;
+    }
   }
 
   const lunchAnchor = values[LUNCH_START_INDEX - 1] ?? values[LUNCH_START_INDEX] ?? lastKnown;
@@ -117,7 +127,11 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
     values[i] = null;
   }
 
-  return { labels, values, currentIdx };
+  return { labels, values, currentIdx, knownCount: known.length, knownSpan, knownIndexes, sparse: false };
+};
+
+const renderChartEmpty = (chartEl, message) => {
+  chartEl.innerHTML = `<div class="chart-empty-state">${message}</div>`;
 };
 
 export const renderIntradayChart = (fundCode, basic, intradayData) => {
@@ -127,7 +141,7 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
   const series = buildIntradaySeries(fundCode, intradayData);
   if (!series) {
     intradayChartInstance = disposeChart(intradayChartInstance);
-    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无当日走势数据，稍后刷新后再查看。</div>';
+    renderChartEmpty(chartEl, '暂无当日走势数据，稍后刷新后再查看。');
     return;
   }
 
@@ -151,21 +165,25 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
 
   if (!pctValues.some((value) => Number.isFinite(value))) {
     intradayChartInstance = disposeChart(intradayChartInstance);
-    chartEl.innerHTML = '<div class="text-muted text-center py-5">暂无有效走势数据，请稍后刷新后再查看。</div>';
+    renderChartEmpty(chartEl, '暂无有效走势数据，请稍后刷新后再查看。');
     return;
   }
+
+  const sparseSeries = false;
+  const chartSeries = pctValues;
 
   intradayChartInstance = ensureChartInstance(intradayChartInstance, chartEl);
   intradayChartInstance.setOption({
     tooltip: {
       trigger: 'axis',
       formatter: (params) => {
-        if (!params || params.length === 0) return '';
-        const point = params[0];
+        const point = Array.isArray(params) ? params[0] : params;
+        if (!point) return '';
+        const label = point.axisValue ?? point.name ?? series.labels?.[point.dataIndex] ?? '';
         if (point.value === null || point.value === undefined || point.value === '-') {
-          return `${point.axisValue}<br/>估算涨跌幅：-`;
+          return `${label}<br/>估算涨跌幅：-`;
         }
-        return `${point.axisValue}<br/>估算涨跌幅：${Number(point.value).toFixed(2)}%`;
+        return `${label}<br/>估算涨跌幅：${Number(point.value).toFixed(2)}%`;
       }
     },
     grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
@@ -188,11 +206,13 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
       axisLabel: { formatter: (value) => `${Number(value).toFixed(2)}%` }
     },
     series: [{
-      data: pctValues,
+      data: chartSeries,
       type: 'line',
       smooth: false,
       showSymbol: false,
-      connectNulls: false,
+      connectNulls: true,
+      symbolSize: 4,
+      itemStyle: { color: '#e5484d' },
       lineStyle: { width: 2, color: '#e5484d' }
     }]
   }, true);
@@ -205,7 +225,7 @@ export const renderHistoryChart = (historyData) => {
   const rows = historyData && Array.isArray(historyData.data) ? historyData.data : [];
   if (rows.length === 0) {
     historyChartInstance = disposeChart(historyChartInstance);
-    chartEl.innerHTML = '<div class="text-muted text-center py-4">暂无历史净值数据。</div>';
+    renderChartEmpty(chartEl, '暂无历史净值数据。');
     return;
   }
 

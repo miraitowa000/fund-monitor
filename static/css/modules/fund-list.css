@@ -413,6 +413,37 @@ body[data-theme='dark'] #app .group-tab-count {
   font-variant-numeric: tabular-nums;
 }
 
+.fund-name-amount--action {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.fund-name-amount--action span {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.fund-name-amount--action svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fund-name-amount--action:hover span,
+.fund-name-amount--action:hover svg {
+  color: var(--brand-color);
+  stroke: var(--brand-color);
+}
+
 .fund-name-group {
   display: inline-flex;
   align-items: center;
@@ -492,6 +523,26 @@ body[data-theme='dark'] #app .fund-name-group-link {
 .fund-nav-status.confirmed {
   color: var(--success-color);
   font-weight: 700;
+}
+
+.fund-dca-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+body[data-theme='dark'] #app .fund-dca-badge {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fbbf24;
 }
 
 .cell-muted {
@@ -711,6 +762,18 @@ body[data-theme='dark'] #app .mobile-fund-card__status.is-confirmed {
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   min-width: 0;
   background: transparent;
+}
+
+.mobile-fund-metric-cell--action {
+  width: 100%;
+  border-top: none;
+  border-left: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobile-fund-metric-cell--action:hover {
+  background: var(--bg-hover);
 }
 
 .mobile-fund-metric-cell:nth-child(3n) {

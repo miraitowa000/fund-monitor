@@ -473,7 +473,7 @@ def build_intraday_from_basic(estimate):
         if gsz <= 0:
             return {'success': False, 'data': []}
         if not estimate.get('success'):
-            return {'success': True, 'data': [{'time': '09:30', 'value': round(gsz, 4)}, {'time': '15:00', 'value': round(gsz, 4)}]}
+            return {'success': False, 'data': []}
         gztime = estimate.get('gztime') or ''
         if not gztime:
             return {'success': False, 'data': []}

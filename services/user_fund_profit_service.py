@@ -74,6 +74,7 @@ def _build_position_item(meta, quote, total_holding_amount=0.0):
         'name': (quote or {}).get('name') or meta.get('code'),
         'group_id': meta.get('group_id'),
         'group_name': meta.get('group_name') or '',
+        'dca_enabled': bool(meta.get('dca_enabled')),
         'has_position': bool(meta.get('has_position')),
         'current_nav': _round_nav(current_nav) if current_nav is not None else None,
         'current_nav_date': str(current_nav_date or '').split(' ')[0] or None,

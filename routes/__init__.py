@@ -1,3 +1,4 @@
+from routes.auth_routes import auth_bp
 from routes.dashboard_routes import dashboard_bp
 from routes.fund_routes import fund_bp
 from routes.site_routes import site_bp
@@ -9,3 +10,4 @@ def register_blueprints(app):
     app.register_blueprint(fund_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(user_bp)
+    app.register_blueprint(auth_bp)

@@ -52,7 +52,8 @@ export const normalizeToStepMinute = (minute) => {
   const bucket = Math.floor((rawH * 60 + rawM) / INTRADAY_STEP_MINUTES) * INTRADAY_STEP_MINUTES;
   const h = Math.floor(bucket / 60);
   const mm = bucket % 60;
-  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  const normalized = `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  return TRADING_MINUTES[minuteToIndex(normalized)] || normalized;
 };
 
 export const readIntradayCache = () => {

@@ -1,0 +1,131 @@
+﻿.holding-action-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.56);
+  backdrop-filter: blur(8px);
+}
+
+.holding-action-modal {
+  width: min(360px, 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  background: var(--bg-panel);
+  box-shadow: 0 30px 72px rgba(15, 23, 42, 0.25);
+  padding: 18px;
+}
+
+.holding-action-modal__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.holding-action-modal__title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.holding-action-modal__title svg,
+.holding-action-modal__close svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.holding-action-modal__close {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.holding-action-modal__fund {
+  display: grid;
+  gap: 6px;
+  padding: 20px 8px 18px;
+  text-align: center;
+}
+
+.holding-action-modal__fund strong {
+  color: var(--text-primary);
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.holding-action-modal__fund span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.holding-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.holding-action-btn,
+.holding-action-wide,
+.holding-action-danger {
+  height: 44px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.holding-action-btn.buy {
+  border: 1px solid rgba(6, 182, 212, 0.75);
+  background: rgba(6, 182, 212, 0.1);
+  color: #0891b2;
+}
+
+.holding-action-btn.sell {
+  border: 1px solid rgba(239, 68, 68, 0.75);
+  background: rgba(239, 68, 68, 0.08);
+  color: var(--danger-color);
+}
+
+.holding-action-btn.dca {
+  border: 1px solid rgba(37, 99, 235, 0.75);
+  background: rgba(37, 99, 235, 0.09);
+  color: #2563eb;
+}
+
+.holding-action-btn.convert {
+  border: 1px solid rgba(168, 85, 247, 0.75);
+  background: rgba(168, 85, 247, 0.1);
+  color: #9333ea;
+}
+
+.holding-action-wide {
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid rgba(6, 182, 212, 0.52);
+  background: var(--bg-panel-soft);
+  color: var(--text-primary);
+}
+
+.holding-action-danger {
+  width: 100%;
+  margin-top: 20px;
+  border: none;
+  background: #ff565d;
+  color: #fff;
+}

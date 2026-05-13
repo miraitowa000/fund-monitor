@@ -1,5 +1,13 @@
 @import './modules/base.css';
 @import './modules/dashboard.css';
+@import './modules/topbar.css';
+@import './modules/auth.css';
+@import './modules/holding-action.css';
+@import './modules/transaction.css';
+@import './modules/dca.css';
+@import './modules/conversion.css';
+@import './modules/earnings.css';
+@import './modules/summary.css';
 @import './modules/fund-list.css';
 @import './modules/detail.css';
 @import './modules/responsive.css';

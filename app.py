@@ -6,6 +6,8 @@ from flask import Flask, url_for
 
 from core.settings import build_mysql_uri
 from routes import register_blueprints
+from services.dca_plan_service import start_dca_plan_scheduler
+from services.fund_transaction_service import start_pending_transaction_confirmation_scheduler
 from services.user_fund_service import init_database
 
 
@@ -16,6 +18,9 @@ def create_app():
 
     init_database()
     register_blueprints(app)
+    if os.getenv('WERKZEUG_RUN_MAIN') == 'true' or os.getenv('FLASK_DEBUG', '1').strip().lower() in ('0', 'false', 'no'):
+        start_pending_transaction_confirmation_scheduler()
+        start_dca_plan_scheduler()
 
     def asset_url(filename):
         normalized = str(filename or '').lstrip('/')

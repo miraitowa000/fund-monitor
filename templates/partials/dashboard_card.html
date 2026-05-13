@@ -1,5 +1,5 @@
 <div class="dashboard-shell">
-  <section class="page-top-search-panel" data-sticky-panel="top-search">
+  <section v-show="!isMobileView || mobileActiveTab === 'home'" class="page-top-search-panel" data-sticky-panel="top-search">
     <div class="page-top-search-panel__head">
       <div class="page-top-search-panel__brand">
         <h1>基金实时监控</h1>
@@ -85,11 +85,243 @@
             <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"></path>
           </svg>
         </button>
+        <div class="user-menu" @click.stop>
+          <button type="button" class="user-menu__trigger" :class="{ active: authMenuOpen }" @click="toggleAuthMenu" aria-label="用户菜单">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 21a8 8 0 0 0-16 0"></path>
+              <circle cx="12" cy="8" r="4"></circle>
+            </svg>
+          </button>
+          <div v-if="authMenuOpen" class="user-menu__dropdown">
+            <div class="user-menu__account">
+              <span>[[ authUser ? '已登录' : '未登录' ]]</span>
+              <strong>[[ accountDisplayName ]]</strong>
+            </div>
+            <button v-if="!authUser" type="button" class="user-menu__item" @click="openAuthModal('login')">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                <path d="M10 17l5-5-5-5"></path>
+                <path d="M15 12H3"></path>
+              </svg>
+              <span>登录 / 注册</span>
+            </button>
+            <button type="button" class="user-menu__item desktop-only" @click="openMyEarnings">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 2v4"></path>
+                <path d="M16 2v4"></path>
+                <path d="M3 10h18"></path>
+                <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+              </svg>
+              <span>我的收益</span>
+            </button>
+            <button type="button" class="user-menu__item desktop-only">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"></path>
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path>
+              </svg>
+              <span>设置</span>
+            </button>
+            <button v-if="authUser" type="button" class="user-menu__item danger" @click="logoutAccount">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <path d="M16 17l5-5-5-5"></path>
+                <path d="M21 12H9"></path>
+              </svg>
+              <span>退出登录</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <div class="dashboard-layout">
+  <div v-if="authModalOpen" class="auth-modal-overlay" @click.self="closeAuthModal">
+    <div class="auth-modal" @click.stop>
+      <div class="auth-modal__header">
+        <div>
+          <h3>[[ authMode === 'login' ? '登录账号' : '注册账号' ]]</h3>
+        </div>
+        <button type="button" class="auth-modal__close" @click="closeAuthModal" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <form class="auth-form" @submit.prevent="submitAuthForm">
+        <label>
+          <span>手机号或邮箱</span>
+          <input type="text" v-model.trim="authForm.account" autocomplete="username" placeholder="请输入手机号码或者邮箱">
+        </label>
+        <label>
+          <span>密码</span>
+          <input type="password" v-model="authForm.password" autocomplete="current-password" placeholder="至少 6 位">
+        </label>
+        <div v-if="authError" class="auth-form__error">[[ authError ]]</div>
+        <button type="submit" class="auth-form__submit" :disabled="authLoading">
+          [[ authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册并登录') ]]
+        </button>
+      </form>
+      <div class="auth-modal__switch">
+        <span>[[ authMode === 'login' ? '没有账号？' : '已有账号？' ]]</span>
+        <button type="button" @click="switchAuthMode(authMode === 'login' ? 'register' : 'login')">
+          [[ authMode === 'login' ? '立即注册' : '去登录' ]]
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <section v-if="earningsViewOpen" class="earnings-page">
+    <div class="earnings-page__head">
+      <button type="button" class="earnings-page__back" @click="closeMyEarnings" aria-label="返回">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+      </button>
+      <div>
+        <h2>汇总盈亏分析</h2>
+      </div>
+      <button type="button" class="earnings-page__refresh" :disabled="earningsLoading" @click="loadDailyEarnings">
+        [[ earningsLoading ? '刷新中' : '刷新' ]]
+      </button>
+    </div>
+
+    <div class="earnings-hero">
+      <span>
+        [[ earningsDisplaySummaryTitle ]]
+        <em v-if="earningsSummaryBadge">[[ earningsSummaryBadge ]]</em>
+      </span>
+      <strong :class="getColorClass(earningsDisplaySummary && earningsDisplaySummary.total_profit)">[[ formatCurrency(earningsDisplaySummary && earningsDisplaySummary.total_profit) ]]</strong>
+      <div class="earnings-hero__meta">
+        <span :class="getColorClass(earningsDisplaySummary && earningsDisplaySummary.total_rate)">收益率 [[ formatPercentText(earningsDisplaySummary && earningsDisplaySummary.total_rate) ]]</span>
+      </div>
+    </div>
+
+    <div class="earnings-toolbar">
+      <div class="earnings-view-tabs">
+        <button type="button" :class="{ active: earningsViewMode === 'day' }" @click="setEarningsViewMode('day')">日</button>
+        <button type="button" :class="{ active: earningsViewMode === 'month' }" @click="setEarningsViewMode('month')">月</button>
+        <button type="button" :class="{ active: earningsViewMode === 'year' }" @click="setEarningsViewMode('year')">年</button>
+      </div>
+      <div class="earnings-period">
+        <button type="button" @click="shiftEarningsPeriod(-1)" aria-label="上一期">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+        </button>
+        <strong>[[ earningsCalendarTitle ]]</strong>
+        <button type="button" @click="shiftEarningsPeriod(1)" aria-label="下一期">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="earningsLoading && !earningsLoaded" class="earnings-state">加载中...</div>
+    <div v-else-if="earningsError && !earningsLoaded" class="earnings-state danger">[[ earningsError ]]</div>
+    <div v-else class="earnings-board" :class="{ loading: earningsLoading }">
+      <div class="earnings-board__head">
+        <span>[[ earningsBoardTitle ]]</span>
+        <div class="earnings-board__actions">
+          <em v-if="earningsLoading">刷新中</em>
+          <div class="earnings-segment compact">
+            <button type="button" :class="{ active: earningsMode === 'amount' }" @click="setEarningsMode('amount')">¥</button>
+            <button type="button" :class="{ active: earningsMode === 'rate' }" @click="setEarningsMode('rate')">%</button>
+          </div>
+        </div>
+      </div>
+      <template v-if="earningsViewMode === 'day'">
+        <div class="earnings-week">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="earnings-calendar">
+          <button
+            v-for="cell in earningsCalendarDays"
+            :key="cell.date"
+            type="button"
+            class="earnings-cell"
+            :class="{ outside: cell.outside, today: cell.today, future: cell.future, empty: !cell.data, selected: cell.selected }"
+            :disabled="cell.future"
+            @click="selectEarningsDate(cell)"
+          >
+            <span class="earnings-cell__day">[[ cell.today ? '今' : cell.day ]]</span>
+            <strong v-if="!cell.future" :class="cell.className">[[ cell.value ]]</strong>
+          </button>
+        </div>
+      </template>
+      <div v-else-if="earningsViewMode === 'month'" class="earnings-period-grid month">
+        <button
+          v-for="cell in earningsMonthCells"
+          :key="cell.key"
+          type="button"
+          class="earnings-period-cell"
+          :class="{ future: cell.future, selected: cell.selected }"
+          :disabled="cell.future"
+          @click="selectEarningsMonth(cell)"
+        >
+          <span>[[ cell.label ]]</span>
+          <strong v-if="!cell.future" :class="cell.className">[[ cell.value ]]</strong>
+        </button>
+      </div>
+      <div v-else class="earnings-period-grid year">
+        <button
+          v-for="cell in earningsYearCells"
+          :key="cell.key"
+          type="button"
+          class="earnings-period-cell"
+          :class="{ selected: cell.selected }"
+          @click="selectEarningsYear(cell)"
+        >
+          <span>[[ cell.label ]]</span>
+          <strong :class="cell.className">[[ cell.value ]]</strong>
+        </button>
+      </div>
+    </div>
+
+    <section class="earnings-rank">
+      <div class="earnings-rank__head">
+        <h3>盈亏明细</h3>
+        <div class="earnings-rank-tabs">
+          <button type="button" :class="{ active: earningsRankTab === 'profit' }" @click="setEarningsRankTab('profit')">盈利Top5</button>
+          <button type="button" :class="{ active: earningsRankTab === 'loss' }" @click="setEarningsRankTab('loss')">亏损Top5</button>
+        </div>
+      </div>
+      <div v-if="earningsRankItems.length === 0" class="earnings-rank__empty">暂无数据</div>
+      <div v-else class="earnings-rank-list">
+        <article v-for="item in earningsRankItems" :key="item.code" class="earnings-rank-item">
+          <div>
+            <strong>[[ item.name || item.code ]]</strong>
+            <div class="earnings-rank-bar">
+              <i :class="getColorClass(item.profit)" :style="{ width: `${Math.max(8, Math.min(100, Math.abs(item.profit) / earningsRankMaxValue * 100))}%` }"></i>
+            </div>
+          </div>
+          <div class="earnings-rank-item__value" :class="getColorClass(item.profit)">
+            <strong>[[ formatCurrency(item.profit) ]]</strong>
+            <span>[[ formatPercentText(item.rate) ]]</span>
+          </div>
+        </article>
+      </div>
+    </section>
+  </section>
+
+  <section v-if="!earningsViewOpen && isMobileView && mobileActiveTab === 'mine'" class="mobile-mine-page">
+    <div class="mobile-mine-card">
+      <div class="mobile-mine-card__avatar">[[ authUser ? accountDisplayName.slice(0, 1).toUpperCase() : '?' ]]</div>
+      <div class="mobile-mine-card__main">
+        <h2>[[ authUser ? accountDisplayName : '未登录' ]]</h2>
+        <p>[[ authUser ? '账号数据已同步' : '数据仅保存在本机' ]]</p>
+        <button v-if="!authUser" type="button" class="mobile-mine-login-btn" @click="openAuthModal('login')">登录</button>
+      </div>
+    </div>
+
+    <div class="mobile-mine-list">
+      <button type="button" class="mobile-mine-item" @click="openMyEarnings">
+        <span>我的收益</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+      </button>
+      <button v-if="authUser" type="button" class="mobile-mine-item danger" @click="logoutAccount">
+        <span>退出登录</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+      </button>
+    </div>
+  </section>
+
+  <div v-show="!earningsViewOpen && (!isMobileView || mobileActiveTab === 'home')" class="dashboard-layout">
     <main class="dashboard-main">
       <section class="summary-panel">
         <div class="section-head">
@@ -287,9 +519,16 @@
                     <div class="fund-name-line">
                       <button type="button" class="table-link table-link--name" @click.stop="showDetail(fund.code)">[[ fund.name ]]</button>
                       <span v-if="fund.nav_confirmed" class="fund-nav-status fund-nav-status--inline confirmed">已更新</span>
+                      <span v-if="fund.dca_enabled" class="fund-dca-badge" title="已开启定投">定</span>
                     </div>
                     <div v-if="editingFundCode !== fund.code" class="fund-name-meta">
-                      <span class="fund-name-amount">[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                      <button type="button" class="fund-name-amount fund-name-amount--action" @click.stop="openHoldingActionModal(fund)">
+                        <span>[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="12" cy="12" r="3"></circle>
+                          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path>
+                        </svg>
+                      </button>
                     </div>
                     <div v-if="editingFundCode !== fund.code" class="fund-name-meta fund-name-meta--sub">
                       <span class="fund-name-code">[[ fund.code ]]</span>
@@ -311,7 +550,13 @@
                       </button>
                     </div>
                     <div v-else class="fund-name-meta">
-                      <span class="fund-name-amount">[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                      <button type="button" class="fund-name-amount fund-name-amount--action" @click.stop="openHoldingActionModal(fund)">
+                        <span>[[ fund.has_position ? formatInlineCurrency(fund.holding_amount) : '¥0.00' ]]</span>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="12" cy="12" r="3"></circle>
+                          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path>
+                        </svg>
+                      </button>
                     </div>
                     <div v-else class="fund-name-meta fund-name-meta--sub">
                       <span class="fund-name-code">[[ fund.code ]]</span>
@@ -355,12 +600,6 @@
                 </td>
                 <td class="sticky-col sticky-col--action">
                   <div class="table-actions">
-                    <button type="button" class="table-icon-btn" title="编辑持仓" aria-label="编辑持仓" @click.stop="openPositionModal(fund)">
-                      <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 20h4l10-10-4-4L4 16v4"></path>
-                        <path d="M13 7l4 4"></path>
-                      </svg>
-                    </button>
                     <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="openDeleteFundModal(fund)">
                       <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M4 7h16"></path>
@@ -398,22 +637,14 @@
                     <div class="mobile-fund-card__title-main">
                       <button type="button" class="table-link table-link--name" @click.stop="showDetail(fund.code)">[[ fund.name ]]</button>
                       <span v-if="fund.nav_confirmed" class="mobile-fund-card__status is-confirmed">已更新</span>
+                      <span v-if="fund.dca_enabled" class="fund-dca-badge" title="已开启定投">定</span>
                     </div>
                     <div class="mobile-fund-card__actions">
                       <div class="mobile-fund-card__action-row">
-                        <button type="button" class="table-icon-btn" title="编辑持仓" aria-label="编辑持仓" @click.stop="openPositionModal(fund)">
+                        <button type="button" class="table-icon-btn" title="持仓操作" aria-label="持仓操作" @click.stop="openHoldingActionModal(fund)">
                           <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M4 20h4l10-10-4-4L4 16v4"></path>
-                            <path d="M13 7l4 4"></path>
-                          </svg>
-                        </button>
-                        <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="openDeleteFundModal(fund)">
-                          <svg class="icon-stroke" viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M4 7h16"></path>
-                            <path d="M9 7V5h6v2"></path>
-                            <path d="M7 7l1 12h8l1-12"></path>
-                            <path d="M10 11v5"></path>
-                            <path d="M14 11v5"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path>
                           </svg>
                         </button>
                       </div>
@@ -449,10 +680,10 @@
                       [[ formatChange(fund.nav_confirmed ? fund.confirmed_change : fund.gszzl, 2) ]]%
                     </strong>
                   </div>
-                  <div class="mobile-fund-metric-cell">
+                  <button type="button" class="mobile-fund-metric-cell mobile-fund-metric-cell--action" @click.stop="openHoldingActionModal(fund)">
                     <span class="mobile-fund-metric-cell__label">持仓金额</span>
                     <strong class="mobile-fund-metric-cell__value">[[ fund.has_position ? formatCurrency(fund.holding_amount) : '¥0.00' ]]</strong>
-                  </div>
+                  </button>
                   <div class="mobile-fund-metric-cell">
                     <span class="mobile-fund-metric-cell__label">当日收益</span>
                     <strong class="mobile-fund-metric-cell__value" :class="getColorClass(fund.daily_profit)">[[ formatCurrency(fund.daily_profit) ]]</strong>
@@ -523,6 +754,7 @@
           <button type="button" class="detail-tab" :class="{ active: detailTab === 'overview' }" @click="setDetailTab('overview')">概览</button>
           <button type="button" class="detail-tab" :class="{ active: detailTab === 'holdings' }" @click="setDetailTab('holdings')">持仓明细</button>
           <button type="button" class="detail-tab" :class="{ active: detailTab === 'history' }" @click="setDetailTab('history')">历史净值</button>
+          <button type="button" class="detail-tab" :class="{ active: detailTab === 'transactions' }" @click="setDetailTab('transactions')">交易记录</button>
         </div>
 
         <div class="detail-panel__body" v-if="detailTab === 'overview'">
@@ -639,12 +871,63 @@
           <div class="empty-state" v-else>请选择一只基金后查看历史净值。</div>
         </div>
 
+        <div class="detail-panel__body" v-else-if="detailTab === 'transactions'">
+          <template v-if="currentFundCode">
+            <div class="subsection-head">
+              <h3>交易记录</h3>
+              <button type="button" class="ghost-action-btn detail-transaction-refresh" @click="loadTransactionHistoryForFund({ code: currentFundCode, name: currentFundName || detailBasicView.name })">
+                刷新
+              </button>
+            </div>
+            <div v-if="transactionHistoryLoading" class="empty-state compact">正在加载交易记录...</div>
+            <div v-else-if="transactionHistoryError" class="empty-state compact danger">[[ transactionHistoryError ]]</div>
+            <div v-else-if="transactionHistoryItems.length === 0" class="empty-state compact">暂无交易记录</div>
+            <div v-else class="detail-transaction-list">
+              <article v-for="item in transactionHistoryItems" :key="`detail-tx-${item.id}`" class="detail-transaction-item">
+                <div class="detail-transaction-item__main">
+                  <strong :class="(item.type === 'SELL' || item.type === 'CONVERT_OUT') ? 'down' : 'up'">[[ transactionTypeLabel(item) ]]</strong>
+                  <span>申请 [[ item.submitted_date || item.trade_date ]] · 净值日 [[ item.nav_date || item.trade_date ]] · 确认日 [[ item.confirm_date || '-' ]] · 净值 [[ formatTransactionNav(item.nav) ]]</span>
+                  <span v-if="item.related_fund_code">关联基金 #[[ item.related_fund_code ]]</span>
+                </div>
+                <div class="detail-transaction-item__metrics">
+                  <span>金额 [[ formatTransactionMoney(item.amount) ]]</span>
+                  <span>份额 [[ formatTransactionShares(item.shares) ]]</span>
+                  <span :class="item.status === 'PENDING' ? 'transaction-status-pending' : 'transaction-status-confirmed'">[[ item.status === 'PENDING' ? '待确认' : '已确认' ]]</span>
+                  <span v-if="item.type === 'SELL' && item.realized_profit != null" :class="getColorClass(item.realized_profit)">收益 [[ formatTransactionMoney(item.realized_profit) ]]</span>
+                </div>
+                <button type="button" class="transaction-history__delete" :disabled="deletingTransactionId === item.id" @click="removeTransaction(item.id)">
+                  [[ deletingTransactionId === item.id ? '删除中' : '删除' ]]
+                </button>
+              </article>
+            </div>
+          </template>
+          <div class="empty-state" v-else>请选择一只基金后查看交易记录。</div>
+        </div>
+
         <div class="detail-panel__body" v-else>
           <div class="empty-state">交易记录模块预留中，后续可以在这里接入加仓、减仓和定投明细。</div>
         </div>
       </section>
     </aside>
   </div>
+
+  <nav class="mobile-bottom-nav mobile-only" v-if="isMobileView">
+    <button type="button" class="mobile-bottom-nav__item" :class="{ active: mobileActiveTab === 'home' }" @click="switchMobileTab('home')">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 10.5 12 3l9 7.5"></path>
+        <path d="M5 10v10h14V10"></path>
+        <path d="M9 20v-6h6v6"></path>
+      </svg>
+      <span>首页</span>
+    </button>
+    <button type="button" class="mobile-bottom-nav__item" :class="{ active: mobileActiveTab === 'mine' }" @click="switchMobileTab('mine')">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 21a8 8 0 0 0-16 0"></path>
+        <circle cx="12" cy="8" r="4"></circle>
+      </svg>
+      <span>我的</span>
+    </button>
+  </nav>
 
   <div v-if="quickAddConfirmOpen" class="quick-add-confirm-overlay" @click.self="closeQuickAddConfirm">
     <div class="quick-add-confirm">
@@ -766,6 +1049,508 @@
           <button type="button" class="btn btn-danger group-modal-confirm" @click="confirmDeleteGroup" :disabled="deletingGroup">
             [[ deletingGroup ? '删除中...' : '确认删除' ]]
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="holdingActionFund" class="holding-action-overlay" @click.self="closeHoldingActionModal">
+    <div class="holding-action-modal" @click.stop>
+      <div class="holding-action-modal__header">
+        <div class="holding-action-modal__title">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1z"></path>
+          </svg>
+          <span>持仓操作</span>
+        </div>
+        <button type="button" class="holding-action-modal__close" @click="closeHoldingActionModal" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="holding-action-modal__fund">
+        <strong>[[ holdingActionFund.name || holdingActionFund.code ]]</strong>
+        <span>#[[ holdingActionFund.code ]]</span>
+      </div>
+      <div class="holding-action-grid">
+        <button type="button" class="holding-action-btn buy" @click="openTransactionModal('buy', holdingActionFund)">加仓</button>
+        <button type="button" class="holding-action-btn sell" @click="openTransactionModal('sell', holdingActionFund)">减仓</button>
+        <button type="button" class="holding-action-btn dca" @click="openDcaModal(holdingActionFund)">定投</button>
+        <button type="button" class="holding-action-btn convert" @click="openConversionModal(holdingActionFund)">转换</button>
+      </div>
+      <button type="button" class="holding-action-wide" @click="openPositionModal(holdingActionFund)">编辑持仓</button>
+      <button type="button" class="holding-action-danger" @click="openDeleteFundModal(holdingActionFund)">删除基金</button>
+    </div>
+  </div>
+
+  <div v-if="dcaModalOpen" class="transaction-modal-overlay dca-modal-overlay" @click.self="closeDcaModal">
+    <div class="transaction-modal dca-modal" @click.stop>
+      <div class="transaction-modal__header">
+        <div>
+          <h3>定投计划</h3>
+          <p>[[ dcaFund?.name || dcaFund?.code ]] #[[ dcaFund?.code ]]</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeDcaModal" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+
+      <div v-if="dcaLoading" class="transaction-history__state">加载中...</div>
+      <form v-else class="transaction-form dca-form" @submit.prevent="submitDcaPlan">
+        <div class="dca-form__body">
+          <label class="dca-switch">
+            <span>
+              <strong>启用定投</strong>
+              <em>系统会在到期交易日中午生成买入记录</em>
+            </span>
+            <input type="checkbox" v-model="dcaForm.enabled">
+            <i></i>
+          </label>
+
+          <div class="transaction-form__row">
+            <label>
+              <span>定投金额 <em>*</em></span>
+              <input
+                type="number"
+                v-model="dcaForm.amount"
+                min="0"
+                step="0.01"
+                placeholder="请输入金额"
+                :class="{ invalid: dcaFieldErrors.amount }"
+                @input="clearDcaFieldError('amount')"
+              >
+              <small v-if="dcaFieldErrors.amount" class="dca-field-error">[[ dcaFieldErrors.amount ]]</small>
+            </label>
+            <label>
+              <span>买入费率 (%) <em>*</em></span>
+              <input
+                type="number"
+                v-model="dcaForm.fee_rate"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                :class="{ invalid: dcaFieldErrors.fee_rate }"
+                @input="clearDcaFieldError('fee_rate')"
+              >
+              <small v-if="dcaFieldErrors.fee_rate" class="dca-field-error">[[ dcaFieldErrors.fee_rate ]]</small>
+            </label>
+          </div>
+
+          <div class="dca-field-label">定投周期</div>
+          <div class="dca-cycle-grid">
+            <button
+              v-for="item in dcaCycleOptions"
+              :key="item.value"
+              type="button"
+              :class="{ active: dcaForm.cycle === item.value }"
+              @click="dcaForm.cycle = item.value"
+            >[[ item.label ]]</button>
+          </div>
+
+          <label>
+            <span>首次定投日期 <em>*</em></span>
+            <div class="transaction-date-wrap">
+              <button
+                type="button"
+                class="transaction-date-field"
+                :class="{ invalid: dcaFieldErrors.first_date }"
+                @click="toggleDcaDatePicker"
+              >
+                <span>[[ formatDcaDate(dcaForm.first_date) || '请选择日期' ]]</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 3v4"></path>
+                  <path d="M17 3v4"></path>
+                  <path d="M4 9h16"></path>
+                  <path d="M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
+                </svg>
+              </button>
+              <div
+                v-if="dcaDatePickerOpen"
+                class="transaction-calendar dca-calendar"
+                :class="{ 'is-up': dcaDatePickerPlacement === 'up' }"
+                @click.stop
+              >
+                <div class="transaction-calendar__head">
+                  <button type="button" @click="shiftDcaCalendarMonth(-1)" aria-label="上个月">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                  </button>
+                  <strong>[[ dcaCalendarTitle() ]]</strong>
+                  <button type="button" @click="shiftDcaCalendarMonth(1)" aria-label="下个月">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+                  </button>
+                </div>
+                <div class="transaction-calendar__week">
+                  <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                </div>
+                <div class="transaction-calendar__grid">
+                  <button
+                    v-for="day in getDcaCalendarDays()"
+                    :key="day.value"
+                    type="button"
+                    :class="{ outside: day.outside, selected: day.selected, today: day.today }"
+                    @click="selectDcaDate(day.value)"
+                  >[[ day.day ]]</button>
+                </div>
+              </div>
+            </div>
+            <small v-if="dcaFieldErrors.first_date" class="dca-field-error">[[ dcaFieldErrors.first_date ]]</small>
+          </label>
+          <div v-if="dcaDatePickerOpen" class="transaction-calendar-backdrop" @click="closeDcaDatePicker"></div>
+
+          <div v-if="dcaForm.cycle === 'weekly' || dcaForm.cycle === 'biweekly'" class="dca-field-block">
+            <div class="dca-field-label">执行星期</div>
+            <div class="dca-weekday-grid">
+              <button
+                v-for="item in dcaWeekdayOptions"
+                :key="item.value"
+                type="button"
+                :class="{ active: Number(dcaForm.weekly_day) === item.value }"
+                @click="dcaForm.weekly_day = item.value"
+              >[[ item.label ]]</button>
+            </div>
+          </div>
+
+          <div v-if="dcaForm.cycle === 'monthly'" class="dca-field-block">
+            <div class="dca-field-label">每月日期</div>
+            <div class="dca-month-grid">
+              <button
+                v-for="day in dcaMonthlyDays"
+                :key="day"
+                type="button"
+                :class="{ active: Number(dcaForm.monthly_day) === day }"
+                @click="dcaForm.monthly_day = day"
+              >[[ day ]]</button>
+            </div>
+          </div>
+
+          <div class="dca-summary">
+            <span>下次执行</span>
+            <strong>[[ dcaNextRunText ]]</strong>
+          </div>
+
+          <div v-if="dcaError && Object.keys(dcaFieldErrors).length === 0" class="transaction-form__error">[[ dcaError ]]</div>
+        </div>
+
+        <div class="transaction-form__actions dca-form__actions" :class="{ 'has-delete': dcaPlan }">
+          <button v-if="dcaPlan" type="button" class="transaction-form__cancel danger" :disabled="dcaDeleting" @click="removeDcaPlan">
+            [[ dcaDeleting ? '删除中...' : '删除计划' ]]
+          </button>
+          <button type="button" class="transaction-form__cancel" @click="closeDcaModal">取消</button>
+          <button type="submit" class="transaction-form__submit" :disabled="dcaSaving">
+            [[ dcaSaving ? '保存中...' : '保存计划' ]]
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div v-if="conversionModalOpen" class="transaction-modal-overlay" @click.self="closeConversionModal">
+    <div class="transaction-modal conversion-modal" @click.stop>
+      <div class="transaction-modal__header">
+        <div>
+          <h3>转换</h3>
+          <p>[[ conversionFund?.name || conversionFund?.code ]] #[[ conversionFund?.code ]]</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeConversionModal" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <form class="transaction-form conversion-form" @submit.prevent="openConversionConfirm">
+        <label>
+          <span>转出基金</span>
+          <input type="text" :value="conversionFund?.name || conversionFund?.code" readonly>
+        </label>
+        <label>
+          <span>转出份额 <em>*</em></span>
+          <div class="conversion-input-action">
+            <input type="number" v-model="conversionForm.shares" min="0" step="0.01" placeholder="请输入转出份额">
+            <button type="button" class="conversion-all-btn" @click="setConvertAllShares">全部</button>
+          </div>
+          <small>最多可转出 [[ formatAvailableConversionShares(conversionFund?.holding_shares) ]] 份</small>
+        </label>
+        <div class="conversion-target-field">
+          <div class="conversion-field-label">转入基金 <em>*</em></div>
+          <div class="conversion-picker-panel">
+            <input type="text" v-model="conversionSearchKeyword" placeholder="搜索基金名称或代码" @input="searchConversionTargets">
+            <div v-if="conversionSearchLoading" class="transaction-history__state">搜索中...</div>
+            <div v-else-if="conversionSearchResults.length > 0" class="conversion-search-list">
+              <button
+                v-for="item in conversionSearchResults"
+                :key="item.code"
+                type="button"
+                @click="selectConversionTarget(item)"
+              >
+                <strong>[[ item.name ]]</strong>
+                <span>#[[ item.code ]]</span>
+              </button>
+            </div>
+            <div v-else-if="conversionSearchKeyword && !conversionTarget" class="transaction-history__state">暂无匹配基金</div>
+          </div>
+          <div v-if="conversionTarget" class="conversion-selected-target">
+            已选择 [[ conversionTarget.name ]] #[[ conversionTarget.code ]]
+          </div>
+        </div>
+        <div class="transaction-form__row">
+          <label>
+            <span>申请日期 <em>*</em></span>
+            <div class="transaction-date-wrap">
+              <button type="button" class="transaction-date-field" @click="toggleConversionDatePicker">
+                <span>[[ formatTransactionDate(conversionForm.submitted_date) || '请选择日期' ]]</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 3v4"></path>
+                  <path d="M17 3v4"></path>
+                  <path d="M4 9h16"></path>
+                  <path d="M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
+                </svg>
+              </button>
+              <div v-if="conversionDatePickerOpen" class="transaction-calendar" @click.stop>
+                <div class="transaction-calendar__head">
+                  <button type="button" @click="shiftConversionCalendarMonth(-1)" aria-label="上个月">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                  </button>
+                  <strong>[[ conversionCalendarTitle() ]]</strong>
+                  <button type="button" @click="shiftConversionCalendarMonth(1)" aria-label="下个月">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+                  </button>
+                </div>
+                <div class="transaction-calendar__week">
+                  <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                </div>
+                <div class="transaction-calendar__grid">
+                  <button
+                    v-for="day in getConversionCalendarDays()"
+                    :key="day.value"
+                    type="button"
+                    :class="{ outside: day.outside, selected: day.selected, today: day.today }"
+                    @click="selectConversionDate(day.value)"
+                  >[[ day.day ]]</button>
+                </div>
+              </div>
+            </div>
+          </label>
+          <div class="conversion-time-field">
+            <div class="conversion-field-label">交易时段</div>
+            <div class="conversion-time-segment">
+              <button type="button" :class="{ active: conversionForm.time_slot === 'BEFORE_1500' }" @click="conversionForm.time_slot = 'BEFORE_1500'">15:00前</button>
+              <button type="button" :class="{ active: conversionForm.time_slot === 'AFTER_1500' }" @click="conversionForm.time_slot = 'AFTER_1500'">15:00后</button>
+            </div>
+          </div>
+        </div>
+        <div v-if="conversionDatePickerOpen" class="transaction-calendar-backdrop" @click="closeConversionDatePicker"></div>
+        <div class="transaction-form__row">
+          <label>
+            <span>转出费率 (%)</span>
+            <input type="number" v-model="conversionForm.from_fee_rate" min="0" step="0.01">
+          </label>
+          <label>
+            <span>补差费率 (%)</span>
+            <input type="number" v-model="conversionForm.supplement_fee_rate" min="0" step="0.01">
+          </label>
+        </div>
+        <label>
+          <span>转入费率 (%)</span>
+          <input type="number" v-model="conversionForm.to_fee_rate" min="0" step="0.01">
+        </label>
+        <div v-if="conversionError" class="transaction-form__error">[[ conversionError ]]</div>
+        <div class="transaction-form__actions">
+          <button type="button" class="transaction-form__cancel" @click="closeConversionModal">取消</button>
+          <button type="submit" class="transaction-form__submit" :disabled="conversionPreviewLoading">
+            [[ conversionPreviewLoading ? '计算中...' : '确认转换' ]]
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div v-if="conversionConfirmOpen" class="transaction-modal-overlay transaction-confirm-overlay" @click.self="closeConversionConfirm">
+    <div class="transaction-modal transaction-confirm-modal conversion-confirm-modal" @click.stop>
+      <div class="transaction-modal__header">
+        <div class="transaction-confirm-title">
+          <h3>转换确认</h3>
+          <p>请确认转换信息</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeConversionConfirm" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="transaction-confirm-card">
+        <div v-for="row in conversionConfirmRows" :key="row[0]" class="transaction-confirm-row">
+          <span>[[ row[0] ]]</span>
+          <strong>[[ row[1] ]]</strong>
+        </div>
+      </div>
+      <div v-if="conversionError" class="transaction-form__error">[[ conversionError ]]</div>
+      <div class="transaction-form__actions">
+        <button type="button" class="transaction-form__cancel" @click="closeConversionConfirm">返回修改</button>
+        <button type="button" class="transaction-form__submit" :disabled="conversionSaving" @click="submitConversion">
+          [[ conversionSaving ? '提交中...' : '提交转换' ]]
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="transactionModalOpen" class="transaction-modal-overlay" @click.self="closeTransactionModal">
+    <div class="transaction-modal" @click.stop>
+      <div class="transaction-modal__header">
+        <div>
+          <p class="transaction-modal__fund-name">[[ transactionFund?.name || transactionFund?.code ]]</p>
+          <p>#[[ transactionFund?.code ]] · [[ transactionMode === 'sell' ? '减仓' : '加仓' ]]</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeTransactionModal" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <form class="transaction-form" @submit.prevent="openTransactionConfirm">
+        <label v-if="transactionMode !== 'sell'">
+          <span>加仓金额 <em>*</em></span>
+          <input type="number" v-model="transactionForm.amount" min="0" step="0.01" placeholder="请输入加仓金额">
+        </label>
+        <label v-else>
+          <span>减仓份额 <em>*</em></span>
+          <input type="number" v-model="transactionForm.shares" min="0" step="0.000001" placeholder="请输入减仓份额">
+        </label>
+          <div class="transaction-form__row">
+          <label>
+            <span>[[ transactionMode === 'sell' ? '卖出费率 (%)' : '买入费率 (%)' ]] <em>*</em></span>
+            <input type="number" v-model="transactionForm.fee_rate" min="0" step="0.01" placeholder="0.00">
+            </label>
+            <label>
+              <span>申请日期 <em>*</em></span>
+              <div class="transaction-date-wrap">
+                <button type="button" class="transaction-date-field" @click="toggleTransactionDatePicker">
+                  <span>[[ formatTransactionDate(transactionForm.submitted_date) || '请选择日期' ]]</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 3v4"></path>
+                    <path d="M17 3v4"></path>
+                    <path d="M4 9h16"></path>
+                    <path d="M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path>
+                  </svg>
+                </button>
+                <div v-if="transactionDatePickerOpen" class="transaction-calendar" @click.stop>
+                  <div class="transaction-calendar__head">
+                    <button type="button" @click="shiftTransactionCalendarMonth(-1)" aria-label="上个月">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                    </button>
+                    <strong>[[ transactionCalendarTitle() ]]</strong>
+                    <button type="button" @click="shiftTransactionCalendarMonth(1)" aria-label="下个月">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18l6-6-6-6"></path></svg>
+                    </button>
+                  </div>
+                  <div class="transaction-calendar__week">
+                    <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                  </div>
+                  <div class="transaction-calendar__grid">
+                    <button
+                      v-for="day in getTransactionCalendarDays()"
+                      :key="day.value"
+                      type="button"
+                      :class="{ outside: day.outside, selected: day.selected, today: day.today }"
+                      @click="selectTransactionDate(day.value)"
+                    >[[ day.day ]]</button>
+                  </div>
+                </div>
+              </div>
+            </label>
+          </div>
+        <div v-if="transactionDatePickerOpen" class="transaction-calendar-backdrop" @click="closeTransactionDatePicker"></div>
+        <div class="transaction-time-label">交易时段</div>
+        <div class="transaction-time-slot">
+          <button type="button" :class="{ active: transactionForm.time_slot === 'BEFORE_1500' }" @click="transactionForm.time_slot = 'BEFORE_1500'">15:00前</button>
+          <button type="button" :class="{ active: transactionForm.time_slot === 'AFTER_1500' }" @click="transactionForm.time_slot = 'AFTER_1500'">15:00后</button>
+        </div>
+        <div v-if="transactionPreview()" class="transaction-form__preview">[[ transactionPreview() ]]</div>
+        <div v-if="transactionError" class="transaction-form__error">[[ transactionError ]]</div>
+        <div class="transaction-form__actions">
+          <button type="button" class="transaction-form__cancel" @click="closeTransactionModal">取消</button>
+          <button type="submit" class="transaction-form__submit" :disabled="transactionSaving || transactionPreviewLoading">
+            [[ transactionPreviewLoading ? '查询中...' : '确定' ]]
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div v-if="transactionConfirmOpen" class="transaction-modal-overlay transaction-confirm-overlay" @click.self="closeTransactionConfirm">
+    <div class="transaction-modal transaction-confirm-modal" @click.stop>
+      <div class="transaction-modal__header">
+        <div class="transaction-confirm-title">
+          <h3>[[ transactionConfirmTitle() ]]</h3>
+          <p>请确认交易信息</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeTransactionConfirm" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="transaction-confirm-card">
+        <div v-for="row in transactionConfirmRows()" :key="row[0]" class="transaction-confirm-row">
+          <span>[[ row[0] ]]</span>
+          <strong>[[ row[1] ]]</strong>
+        </div>
+        <p class="transaction-confirm-note">*基于确认日净值计算</p>
+      </div>
+      <div v-if="transactionConfirmError" class="transaction-form__error">[[ transactionConfirmError ]]</div>
+      <div class="transaction-form__actions">
+        <button type="button" class="transaction-form__cancel" @click="closeTransactionConfirm">返回修改</button>
+        <button type="button" class="transaction-form__submit" :disabled="transactionSaving" @click="submitTransaction">
+          [[ transactionConfirmActionText() ]]
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="transactionHistoryOpen" class="transaction-modal-overlay" @click.self="closeTransactionHistory">
+    <div class="transaction-modal transaction-modal--history" @click.stop>
+      <div class="transaction-modal__header">
+        <div>
+          <h3>交易记录</h3>
+          <p>[[ transactionHistoryFund?.name || transactionHistoryFund?.code ]] #[[ transactionHistoryFund?.code ]]</p>
+        </div>
+        <button type="button" class="transaction-modal__close" @click="closeTransactionHistory" aria-label="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12"></path>
+            <path d="M18 6L6 18"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="transaction-history">
+        <div v-if="transactionHistoryLoading" class="transaction-history__state">加载中...</div>
+        <div v-else-if="transactionHistoryError" class="transaction-history__state danger">[[ transactionHistoryError ]]</div>
+        <div v-else-if="transactionHistoryItems.length === 0" class="transaction-history__state">暂无交易记录</div>
+        <div v-else class="transaction-history__list">
+          <article v-for="item in transactionHistoryItems" :key="item.id" class="transaction-history__item">
+            <div class="transaction-history__main">
+              <strong :class="(item.type === 'SELL' || item.type === 'CONVERT_OUT') ? 'down' : 'up'">[[ transactionTypeLabel(item) ]]</strong>
+              <span>申请 [[ item.submitted_date || item.trade_date ]] · 净值日 [[ item.nav_date || item.trade_date ]] · 确认日 [[ item.confirm_date || '-' ]] · 净值 [[ formatTransactionNav(item.nav) ]]</span>
+              <span v-if="item.related_fund_code">关联基金 #[[ item.related_fund_code ]]</span>
+            </div>
+            <div class="transaction-history__metrics">
+              <span>金额 [[ formatTransactionMoney(item.amount) ]]</span>
+              <span>份额 [[ formatTransactionShares(item.shares) ]]</span>
+              <span :class="item.status === 'PENDING' ? 'transaction-status-pending' : 'transaction-status-confirmed'">[[ item.status === 'PENDING' ? '待确认' : '已确认' ]]</span>
+              <span v-if="item.type === 'SELL' && item.realized_profit != null" :class="getColorClass(item.realized_profit)">收益 [[ formatTransactionMoney(item.realized_profit) ]]</span>
+            </div>
+            <button type="button" class="transaction-history__delete" :disabled="deletingTransactionId === item.id" @click="removeTransaction(item.id)">
+              [[ deletingTransactionId === item.id ? '删除中' : '删除' ]]
+            </button>
+          </article>
         </div>
       </div>
     </div>

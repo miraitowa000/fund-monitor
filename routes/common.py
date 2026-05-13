@@ -1,5 +1,7 @@
 from flask import jsonify, request
 
+from services.auth_service import require_registered_user_id
+
 
 def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -24,3 +26,16 @@ def require_client_id():
     if not client_id:
         return None, json_response({'error': 'Missing X-Client-Id header'}, 400)
     return client_id, None
+
+
+def require_registered_user():
+    client_id, error = require_client_id()
+    if error:
+        return None, None, error
+    try:
+        user_id = require_registered_user_id(client_id)
+        return client_id, user_id, None
+    except PermissionError as exc:
+        return client_id, None, json_response({'error': str(exc)}, 401)
+    except ValueError as exc:
+        return None, None, json_response({'error': str(exc)}, 400)
