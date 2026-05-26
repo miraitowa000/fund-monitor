@@ -2,7 +2,7 @@ import re
 import threading
 import time
 from concurrent.futures import TimeoutError
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from bs4 import BeautifulSoup
 
@@ -325,7 +325,7 @@ def get_fund_holdings(fund_code):
 
 def _fetch_fund_networth_history(code, days, history_cache_key):
     code = str(code).zfill(6)
-    days = max(30, min(int(days or 30), 365))
+    days = max(7, min(int(days or 30), 380))
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days)
     start_date_text = start_date.strftime('%Y-%m-%d')
@@ -442,7 +442,7 @@ def _wait_for_remote_history_refresh(code, days, history_cache_key, wait_seconds
 
 def get_fund_networth_history(fund_code, days=30):
     code = str(fund_code).zfill(6)
-    days = max(30, min(int(days or 30), 365))
+    days = max(7, min(int(days or 30), 380))
     history_cache_key = f'{code}:{days}'
 
     local_cached = cache_get('history', history_cache_key, TTL_HISTORY_SECONDS)
@@ -604,3 +604,99 @@ def get_fund_details(fund_code):
         cache_set('detail', code, stale_detail)
         return stale_detail
     raise RuntimeError(f'failed to load fund detail for {code}')
+
+
+def _history_rows_for_performance(code, days):
+    payload = get_fund_networth_history(code, days=days)
+    rows = payload.get('data') if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return []
+    result = []
+    for row in rows:
+        try:
+            date_text = str(row.get('date') or '').strip()
+            value = float(row.get('value'))
+            if date_text and value > 0:
+                result.append({'date': date_text, 'value': value})
+        except Exception:
+            continue
+    result.sort(key=lambda item: item['date'])
+    return result
+
+
+def _shift_months(value, months):
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = value.day
+    while day > 28:
+        try:
+            return date(year, month, day)
+        except ValueError:
+            day -= 1
+    return date(year, month, day)
+
+
+def _performance_target_date(latest_date, days):
+    if days == 7:
+        return latest_date - timedelta(days=7)
+    if days == 30:
+        return _shift_months(latest_date, -1)
+    if days == 90:
+        return _shift_months(latest_date, -3)
+    if days == 180:
+        return _shift_months(latest_date, -6)
+    if days == 365:
+        return _shift_months(latest_date, -12)
+    return latest_date - timedelta(days=days)
+
+
+def _find_base_row(rows, target_date):
+    target_text = target_date.strftime('%Y-%m-%d')
+    candidate = None
+    for row in rows:
+        if row['date'] <= target_text:
+            candidate = row
+        else:
+            break
+    return candidate
+
+
+def calculate_fund_performance(fund_code, ranges=None):
+    code = str(fund_code).zfill(6)
+    normalized_ranges = []
+    for item in ranges or [7, 30, 90, 180, 365]:
+        try:
+            days = int(item)
+        except Exception:
+            continue
+        if days in (7, 30, 90, 180, 365) and days not in normalized_ranges:
+            normalized_ranges.append(days)
+    if not normalized_ranges:
+        normalized_ranges = [7, 30, 90, 180, 365]
+
+    performance = {}
+    all_rows = _history_rows_for_performance(code, 380 if 365 in normalized_ranges else max(normalized_ranges))
+    for days in normalized_ranges:
+        rows = all_rows
+        if len(rows) < 2:
+            performance[f'{days}d'] = None
+            continue
+        latest = rows[-1]
+        try:
+            latest_date = datetime.strptime(latest['date'], '%Y-%m-%d').date()
+        except Exception:
+            performance[f'{days}d'] = None
+            continue
+        start_row = _find_base_row(rows, _performance_target_date(latest_date, days))
+        if not start_row or start_row['date'] == latest['date']:
+            performance[f'{days}d'] = None
+            continue
+        change_pct = ((latest['value'] - start_row['value']) / start_row['value']) * 100
+        performance[f'{days}d'] = {
+            'value': round(change_pct, 2),
+            'start_date': start_row['date'],
+            'end_date': latest['date'],
+        }
+
+    return {'code': code, 'success': True, 'ranges': performance}

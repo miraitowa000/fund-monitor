@@ -87,6 +87,49 @@ def _find_nav_by_date(fund_code, nav_date):
     return None
 
 
+def _history_days_for_start_date(start_date):
+    start = parse_date(start_date)
+    today = datetime.now().date()
+    return max((today - start).days + 7, 30)
+
+
+def _find_first_available_nav(fund_code, start_date, max_days=30, history_rows=None):
+    if not start_date:
+        return None
+
+    start = parse_date(start_date)
+    today = datetime.now().date()
+    if start > today:
+        return None
+
+    end = min(start + timedelta(days=max(int(max_days or 30), 1) - 1), today)
+    rows = history_rows
+    if rows is None:
+        history = get_fund_networth_history(fund_code, days=_history_days_for_start_date(start_date))
+        rows = history.get('data') if history.get('success') else []
+
+    best = None
+    for item in rows or []:
+        item_date_text = str(item.get('date') or '')[:10]
+        if not item_date_text:
+            continue
+        try:
+            item_date = parse_date(item_date_text)
+        except ValueError:
+            continue
+        if item_date < start or item_date > end:
+            continue
+        nav = _to_float(item.get('value'))
+        if nav is None or nav <= 0:
+            continue
+        if best is None or item_date < best[0]:
+            best = (item_date, nav)
+
+    if not best:
+        return None
+    return {'nav_date': format_date(best[0]), 'nav': best[1]}
+
+
 @lru_cache(maxsize=512)
 def _is_qdii_fund(fund_code):
     try:
@@ -130,7 +173,14 @@ def _resolve_confirm_date(fund_code, nav_date, payload):
     return _shift_trading_days(nav_date, 1)
 
 
-def _calculate_transaction_fields(fund_code, payload):
+def _resolve_explicit_confirm_date(payload):
+    explicit = str(payload.get('confirm_date') or '').strip()[:10]
+    if explicit:
+        return _normalize_date(explicit, '确认日期')
+    return None
+
+
+def _calculate_transaction_fields(fund_code, payload, history_rows=None):
     code = normalize_fund_code(fund_code)
     if not code.isdigit() or len(code) != 6:
         raise ValueError('基金代码格式不正确')
@@ -146,10 +196,15 @@ def _calculate_transaction_fields(fund_code, payload):
         trade_date, time_slot = resolve_trade_date(submitted_date, time_slot)
 
     nav_date = str(payload.get('nav_date') or trade_date).strip()[:10]
-    confirm_date = _resolve_confirm_date(code, nav_date, payload)
+    confirm_date = _resolve_explicit_confirm_date(payload)
     nav = _to_float(payload.get('nav'))
     if nav is None or nav <= 0:
-        nav = _find_nav_by_date(code, nav_date)
+        available_nav = _find_first_available_nav(code, nav_date, history_rows=history_rows)
+        if available_nav:
+            nav_date = available_nav['nav_date']
+            nav = available_nav['nav']
+            if not confirm_date:
+                confirm_date = nav_date
 
     fee = _to_float(payload.get('fee'), 0.0) or 0.0
     fee_rate = _to_float(payload.get('fee_rate'))
@@ -177,6 +232,9 @@ def _calculate_transaction_fields(fund_code, payload):
             amount = shares * nav
             if fee_rate is not None and not payload.get('fee'):
                 fee = amount * fee_rate / 100
+
+    if nav and nav > 0 and not confirm_date:
+        confirm_date = nav_date
 
     status = CONFIRMED if _can_confirm(nav, confirm_date) else PENDING
     return {
@@ -390,20 +448,19 @@ def list_fund_transactions(user_id, fund_code):
         }
 
 
-def _confirm_pending_tx(session, tx):
+def _confirm_pending_tx(session, tx, history_rows=None):
     payload = {
         'type': tx.transaction_type,
         'submitted_date': tx.submitted_date,
         'time_slot': tx.time_slot,
         'trade_date': tx.trade_date,
         'nav_date': tx.nav_date,
-        'confirm_date': tx.confirm_date,
         'amount': tx.amount,
         'shares': tx.shares,
         'fee': tx.fee,
         'fee_rate': tx.fee_rate,
     }
-    calculated = _calculate_transaction_fields(tx.fund_code, payload)
+    calculated = _calculate_transaction_fields(tx.fund_code, payload, history_rows=history_rows)
     if calculated['status'] != CONFIRMED:
         return False
 
@@ -451,9 +508,17 @@ def confirm_pending_transactions(user_id=None, fund_code=None):
                     )
                     .order_by(FundTransaction.trade_date.asc(), FundTransaction.id.asc())
                 ).scalars().all()
+                history_rows = None
+                if rows:
+                    earliest_nav_date = min(str(tx.nav_date or tx.trade_date)[:10] for tx in rows)
+                    history = get_fund_networth_history(
+                        pair_fund_code,
+                        days=_history_days_for_start_date(earliest_nav_date),
+                    )
+                    history_rows = history.get('data') if history.get('success') else []
                 pair_confirmed = 0
                 for tx in rows:
-                    if _confirm_pending_tx(session, tx):
+                    if _confirm_pending_tx(session, tx, history_rows=history_rows):
                         pair_confirmed += 1
                 if pair_confirmed:
                     session.flush()

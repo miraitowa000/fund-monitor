@@ -3,7 +3,7 @@ import {
   deleteFundTransaction,
   fetchFundTransactions,
   previewFundTransaction,
-} from './api.js';
+} from './api.js?v=__APP_ASSET_VERSION__';
 
 const { ref } = window.Vue;
 

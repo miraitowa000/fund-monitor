@@ -499,6 +499,17 @@ body[data-theme='dark'] #app .fund-name-group-link {
   font-weight: 800;
 }
 
+.performance-col {
+  min-width: 86px;
+  text-align: right;
+}
+
+.cell-main--performance {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .table-actions {
   display: flex;
   align-items: center;

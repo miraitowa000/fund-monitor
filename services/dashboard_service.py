@@ -8,12 +8,15 @@ from services.dashboard_cache_service import (
     set_dashboard_bootstrap,
 )
 from services.index_service import get_indexes
+from services.fund_transaction_service import confirm_pending_transactions
+from services.fund_conversion_service import confirm_pending_conversions
 from services.user_fund_profit_service import get_user_portfolio
 from services.portfolio_cache_service import (
     get_stale_user_portfolio,
     get_user_portfolio as get_cached_user_portfolio,
 )
 from services.user_fund_service import bootstrap_user_funds, get_user_snapshot
+from services.user_fund_service import ensure_user
 
 
 _PORTFOLIO_REFRESH_INFLIGHT = set()
@@ -22,7 +25,7 @@ _PORTFOLIO_REFRESH_LOCK = threading.Lock()
 
 def _refresh_portfolio_in_background(client_id, user_funds):
     try:
-        get_user_portfolio(client_id, force_refresh=True, user_funds=user_funds)
+        get_user_portfolio(client_id, force_refresh=True, user_funds=user_funds, confirm_pending=False)
     except Exception:
         increment_metric('cache.portfolio.bootstrap_bg_refresh_error')
     finally:
@@ -70,10 +73,22 @@ def _schedule_portfolio_refresh(client_id, user_funds):
 
 def get_dashboard_bootstrap(client_id, legacy_codes=None):
     legacy_codes = legacy_codes or []
+    user_id = ensure_user(client_id)
+
+    try:
+        confirm_result = confirm_pending_transactions(user_id=user_id)
+    except Exception:
+        confirm_result = {'confirmed': 0}
+    try:
+        conversion_confirm_result = confirm_pending_conversions(user_id=user_id)
+    except Exception:
+        conversion_confirm_result = {'confirmed': 0}
+
+    confirmed_count = int(confirm_result.get('confirmed') or 0) + int(conversion_confirm_result.get('confirmed') or 0)
 
     if not legacy_codes:
         cached = get_cached_dashboard_bootstrap(client_id)
-        if cached:
+        if cached and not confirmed_count:
             increment_metric('cache.dashboard.hit')
             return cached
         increment_metric('cache.dashboard.miss')
@@ -107,7 +122,13 @@ def get_dashboard_bootstrap(client_id, legacy_codes=None):
             _schedule_portfolio_refresh(client_id, user_funds)
         else:
             increment_metric('cache.portfolio.bootstrap_sync_refresh')
-            portfolio = get_user_portfolio(client_id, force_refresh=True, user_funds=user_funds, request_timeout=6)
+            portfolio = get_user_portfolio(
+                client_id,
+                force_refresh=True,
+                user_funds=user_funds,
+                request_timeout=6,
+                confirm_pending=False,
+            )
 
     payload = {
         'success': True,

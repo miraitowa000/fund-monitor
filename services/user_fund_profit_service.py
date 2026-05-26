@@ -7,7 +7,10 @@ from services.portfolio_cache_service import (
     get_user_portfolio as get_cached_user_portfolio,
     set_user_portfolio,
 )
+from services.fund_transaction_service import confirm_pending_transactions
+from services.fund_conversion_service import confirm_pending_conversions
 from services.user_fund_service import list_user_funds
+from services.user_fund_service import ensure_user
 
 
 def _to_float(value):
@@ -40,6 +43,28 @@ def _build_quote_map(quotes):
         if code:
             result[code] = item or {}
     return result
+
+
+def _quote_has_usable_market_data(quote):
+    if not quote:
+        return False
+    if quote.get('success'):
+        return True
+    value_fields = (
+        quote.get('gsz'),
+        quote.get('dwjz'),
+        quote.get('confirmed_nav'),
+        quote.get('current_nav'),
+    )
+    return any(value not in (None, '', '-') for value in value_fields)
+
+
+def _portfolio_has_usable_market_data(payload):
+    items = payload.get('items') if isinstance(payload, dict) else []
+    return any(
+        item.get('current_nav') is not None or item.get('previous_nav') is not None
+        for item in (items or [])
+    )
 
 
 def _pick_current_nav(quote):
@@ -142,6 +167,7 @@ def _build_user_portfolio_payload(client_id, user_funds=None, request_timeout=15
     codes = [item['code'] for item in user_funds]
     quotes = fetch_funds_parallel(codes, request_timeout=request_timeout) if codes else []
     quote_map = _build_quote_map(quotes)
+    usable_quote_count = sum(1 for quote in quote_map.values() if _quote_has_usable_market_data(quote))
 
     items = []
     total_holding_amount = 0.0
@@ -184,6 +210,8 @@ def _build_user_portfolio_payload(client_id, user_funds=None, request_timeout=15
 
     return {
         'success': True,
+        'market_data_available': usable_quote_count > 0 or not codes,
+        'usable_quote_count': usable_quote_count,
         'summary': {
             'total_holding_amount': _round_money(total_holding_amount),
             'total_daily_profit': _round_money(total_daily_profit),
@@ -199,7 +227,21 @@ def _build_user_portfolio_payload(client_id, user_funds=None, request_timeout=15
     }
 
 
-def get_user_portfolio(client_id, force_refresh=False, user_funds=None, request_timeout=15):
+def get_user_portfolio(client_id, force_refresh=False, user_funds=None, request_timeout=15, confirm_pending=True):
+    if confirm_pending:
+        try:
+            confirm_result = confirm_pending_transactions(user_id=ensure_user(client_id))
+            if confirm_result.get('confirmed'):
+                force_refresh = True
+        except Exception:
+            pass
+        try:
+            conversion_confirm_result = confirm_pending_conversions(user_id=ensure_user(client_id))
+            if conversion_confirm_result.get('confirmed'):
+                force_refresh = True
+        except Exception:
+            pass
+
     if not force_refresh:
         cached = get_cached_user_portfolio(client_id)
         if cached:
@@ -211,6 +253,12 @@ def get_user_portfolio(client_id, force_refresh=False, user_funds=None, request_
 
     try:
         payload = _build_user_portfolio_payload(client_id, user_funds=user_funds, request_timeout=request_timeout)
+        if user_funds and not _portfolio_has_usable_market_data(payload):
+            stale = get_stale_user_portfolio(client_id)
+            if stale and _portfolio_has_usable_market_data(stale):
+                return stale
+            payload['market_data_available'] = False
+            return payload
         set_user_portfolio(client_id, payload)
         return payload
     except Exception:

@@ -10,7 +10,7 @@ from services.fund_transaction_service import (
     CONVERT_IN,
     CONVERT_OUT,
     PENDING,
-    _find_nav_by_date,
+    _find_first_available_nav,
     get_available_confirmed_shares,
     _invalidate_user_view_caches_for_user_id,
     _is_qdii_fund,
@@ -92,13 +92,17 @@ def _validate_available_shares(session, user_id, fund_code, shares, exclude_conv
 
 
 def _calculate_conversion(data):
-    from_nav_date, time_slot = resolve_trade_date(data['submitted_date'], data['time_slot'])
-    from_confirm_date = _confirm_date_for_fund(data['from_fund_code'], from_nav_date)
-    to_nav_date = from_nav_date
-    to_confirm_date = _confirm_date_for_fund(data['to_fund_code'], to_nav_date)
+    from_start_date, time_slot = resolve_trade_date(data['submitted_date'], data['time_slot'])
+    to_start_date = from_start_date
 
-    from_nav = _find_nav_by_date(data['from_fund_code'], from_nav_date)
-    to_nav = _find_nav_by_date(data['to_fund_code'], to_nav_date)
+    from_available = _find_first_available_nav(data['from_fund_code'], from_start_date)
+    to_available = _find_first_available_nav(data['to_fund_code'], to_start_date)
+    from_nav_date = from_available['nav_date'] if from_available else from_start_date
+    to_nav_date = to_available['nav_date'] if to_available else to_start_date
+    from_nav = from_available['nav'] if from_available else None
+    to_nav = to_available['nav'] if to_available else None
+    from_confirm_date = from_nav_date if from_available else _confirm_date_for_fund(data['from_fund_code'], from_start_date)
+    to_confirm_date = to_nav_date if to_available else _confirm_date_for_fund(data['to_fund_code'], to_start_date)
     from_amount = data['from_shares'] * from_nav if from_nav else None
     from_fee = from_amount * data['from_fee_rate'] / 100 if from_amount is not None else 0.0
     out_net_amount = from_amount - from_fee if from_amount is not None else None
@@ -112,6 +116,8 @@ def _calculate_conversion(data):
     return {
         **data,
         'time_slot': time_slot,
+        'from_start_date': from_start_date,
+        'to_start_date': to_start_date,
         'from_nav_date': from_nav_date,
         'from_confirm_date': from_confirm_date,
         'from_nav': from_nav,
@@ -280,9 +286,13 @@ def confirm_pending_conversions(user_id=None, fund_code=None):
             if calculated['status'] != STATUS_CONFIRMED:
                 continue
             row.status = STATUS_CONFIRMED
+            row.from_nav_date = calculated['from_nav_date']
+            row.from_confirm_date = calculated['from_confirm_date']
             row.from_nav = _round_nav(calculated['from_nav'])
             row.from_amount = _round_money(calculated['from_amount'])
             row.from_fee = _round_money(calculated['from_fee'])
+            row.to_nav_date = calculated['to_nav_date']
+            row.to_confirm_date = calculated['to_confirm_date']
             row.to_nav = _round_nav(calculated['to_nav'])
             row.to_amount = _round_money(calculated['to_amount'])
             row.to_fee = _round_money(calculated['to_fee'])
@@ -292,11 +302,17 @@ def confirm_pending_conversions(user_id=None, fund_code=None):
             for tx in txs:
                 tx.status = CONFIRMED
                 if tx.transaction_type == CONVERT_OUT:
+                    tx.trade_date = row.from_nav_date
+                    tx.nav_date = row.from_nav_date
+                    tx.confirm_date = row.from_confirm_date
                     tx.nav = row.from_nav
                     tx.amount = row.from_amount
                     tx.fee = row.from_fee
                     tx.shares = row.from_shares
                 elif tx.transaction_type == CONVERT_IN:
+                    tx.trade_date = row.to_nav_date
+                    tx.nav_date = row.to_nav_date
+                    tx.confirm_date = row.to_confirm_date
                     tx.nav = row.to_nav
                     tx.amount = row.to_amount
                     tx.fee = row.to_fee + row.supplement_fee

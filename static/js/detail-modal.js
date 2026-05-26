@@ -1,6 +1,6 @@
-import { loadFundDetail as fetchFundDetail } from './api.js';
-import { renderIntradayChart, resizeDetailCharts } from './charts.js';
-import { EMPTY_DETAIL } from './formatters.js';
+import { loadFundDetail as fetchFundDetail } from './api.js?v=__APP_ASSET_VERSION__';
+import { renderIntradayChart, resizeDetailCharts } from './charts.js?v=__APP_ASSET_VERSION__';
+import { EMPTY_DETAIL } from './formatters.js?v=__APP_ASSET_VERSION__';
 
 const hasDetailData = (data) => {
   const hasBasic = !!(data.basic && (data.basic.name || data.basic.gsz || data.basic.dwjz));
@@ -20,6 +20,7 @@ export const createDetailController = ({
   nextTick,
   hasLoadedAnyDetail,
   pendingFundCode,
+  syncServerIntradaySeries,
 }) => {
   let latestDetailRequestId = 0;
 
@@ -44,6 +45,7 @@ export const createDetailController = ({
       const hit = (funds.value || []).find((fund) => fund.code === code);
       const data = await fetchFundDetail(code);
       if (requestId !== latestDetailRequestId) return;
+      await syncServerIntradaySeries?.([code]);
 
       if (hasDetailData(data)) {
         currentFundCode.value = code;

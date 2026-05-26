@@ -16,7 +16,7 @@ def _normalize_code(code):
 
 
 def _normalize_days(days):
-    return max(30, min(int(days or 30), 365))
+    return max(7, min(int(days or 30), 380))
 
 
 def _build_history_cache_key(code, days):

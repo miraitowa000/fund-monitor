@@ -17,6 +17,11 @@ from services.quote_cache_service import (
     release_basic_quote_refresh_lock,
     set_basic_quote,
 )
+from services.intraday_series_service import (
+    get_active_position_fund_codes,
+    is_intraday_collection_open,
+    record_intraday_snapshots,
+)
 
 try:
     import akshare as ak
@@ -252,6 +257,9 @@ def get_pingzhongdata_snapshot(fund_code):
             'code': extract_string('fS_code') or code,
             'name': extract_string('fS_name'),
             'networth': networth,
+            'grand_total': extract_json('Data_grandTotal') or [],
+            'rate_in_similar_type': extract_json('Data_rateInSimilarType') or [],
+            'rate_in_similar_percent': extract_json('Data_rateInSimilarPersent') or [],
             'latest_date': _fmt_date(latest) if isinstance(latest, dict) else '',
             'latest_value': str(round(float(latest.get('y')), 4)) if isinstance(latest, dict) and latest.get('y') not in (None, '') else '-',
             'latest_change': f"{float(latest.get('equityReturn', 0)):.2f}" if isinstance(latest, dict) and latest.get('equityReturn') not in (None, '') else '-',
@@ -633,7 +641,9 @@ def fetch_funds_parallel(codes, request_timeout=15):
                 code = future_to_code[future]
                 stale = cache_get_stale('basic', code)
                 results_map[code] = stale if _should_use_stale_basic(stale) else build_timeout_placeholder(code)
-    return [results_map.get(code) for code in norm_codes]
+    results = [results_map.get(code) for code in norm_codes]
+    record_intraday_snapshots(results)
+    return results
 
 
 def _background_refresh_loop():
@@ -647,6 +657,8 @@ def _background_refresh_loop():
         cache_prune('related_etf', TTL_RELATED_ETF_SECONDS * 4)
         prune_watched_codes()
         codes = get_watched_codes()
+        if is_intraday_collection_open():
+            codes = list(dict.fromkeys([*codes, *get_active_position_fund_codes()]))
         if not codes:
             continue
         futures = [
@@ -656,6 +668,10 @@ def _background_refresh_loop():
         ]
         if futures:
             futures_wait(futures, timeout=15)
+            record_intraday_snapshots([
+                cache_get('basic', code, TTL_BASIC_SECONDS) or get_stale_basic_quote(code)
+                for code in codes
+            ])
 
 
 def start_background_refresh_thread():

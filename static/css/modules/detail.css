@@ -167,6 +167,47 @@ body[data-theme='dark'] #app .chart-surface {
   height: 200px;
 }
 
+.subsection-head--trend {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trend-title-block {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.trend-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.trend-period-return {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.trend-period-return span {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.trend-period-return strong {
+  font-size: 18px;
+  font-weight: 900;
+}
+
 .chart-surface--portfolio {
   height: 176px;
   margin-top: 0;
