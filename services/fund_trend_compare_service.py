@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+from core.time_utils import timestamp_to_china_datetime
 from services.fund_basic_service import get_pingzhongdata_snapshot
 from services.user_fund_service import normalize_fund_code
 
@@ -21,7 +22,7 @@ def _to_float(value):
 
 def _date_from_timestamp(value):
     try:
-        return datetime.fromtimestamp(float(value) / 1000).date()
+        return timestamp_to_china_datetime(float(value) / 1000).date()
     except Exception:
         return None
 

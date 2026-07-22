@@ -1,8 +1,8 @@
 import threading
-from datetime import datetime
 
 from core.runtime import PORTFOLIO_REFRESH_EXECUTOR, PORTFOLIO_REFRESH_SEMAPHORE
 from core.perf_metrics import increment_metric
+from core.time_utils import china_now
 from services.dashboard_cache_service import (
     get_dashboard_bootstrap as get_cached_dashboard_bootstrap,
     set_dashboard_bootstrap,
@@ -137,7 +137,7 @@ def get_dashboard_bootstrap(client_id, legacy_codes=None):
         'indexes': get_indexes(),
         'bootstrapped_legacy': bootstrapped_legacy,
         'portfolio_stale': portfolio_stale,
-        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'server_time': china_now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
     if portfolio_stale:

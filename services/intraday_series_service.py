@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time as dt_time
+from datetime import datetime, time as dt_time
 import re
 
 from sqlalchemy import distinct, select
@@ -9,6 +9,7 @@ from sqlalchemy import distinct, select
 from core.db import session_scope
 from core.models import UserFund
 from core.redis_client import get_redis_client
+from core.time_utils import china_now, china_today
 from services.trading_calendar_service import is_trading_day
 
 
@@ -18,7 +19,7 @@ INTRADAY_SERIES_KEY_PREFIX = 'intraday:fund'
 
 
 def get_intraday_today_text():
-    return date.today().strftime('%Y-%m-%d')
+    return china_today().strftime('%Y-%m-%d')
 
 
 def _build_key(code, day_text=None):
@@ -84,7 +85,7 @@ def _is_trade_minute(minute):
 
 
 def is_intraday_collection_open(now=None):
-    current = now or datetime.now()
+    current = now or china_now()
     if not is_trading_day(current.date()):
         return False
     return _is_trade_minute(current.strftime('%H:%M'))

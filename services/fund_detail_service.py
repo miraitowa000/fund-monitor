@@ -10,6 +10,7 @@ from core.cache import cache_get, cache_get_stale, cache_set
 from core.http import http_get
 from core.perf_metrics import increment_metric
 from core.runtime import DETAIL_EXECUTOR, DETAIL_PART_EXECUTOR, register_watched_codes
+from core.time_utils import timestamp_to_china_datetime
 from services.history_cache_service import (
     acquire_history_refresh_lock,
     get_fund_history as get_cached_fund_history,
@@ -397,7 +398,7 @@ def _fetch_fund_networth_history(code, days, history_cache_key):
             if not isinstance(item, dict):
                 continue
             try:
-                item_date = datetime.fromtimestamp(float(item.get('x')) / 1000).date()
+                item_date = timestamp_to_china_datetime(float(item.get('x')) / 1000).date()
                 if item_date < start_date or item_date > end_date:
                     continue
                 result.append({'date': item_date.strftime('%Y-%m-%d'), 'value': float(item.get('y')), 'change': str(item.get('equityReturn', '0'))})
