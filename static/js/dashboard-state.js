@@ -1,4 +1,4 @@
-import { saveFundSnapshotsToCache } from './cache.js';
+import { saveFundSnapshotsToCache } from './cache.js?v=__APP_ASSET_VERSION__';
 
 const normalizePortfolioItems = (items) => (
   Array.isArray(items) ? items.map((item) => ({

@@ -1,7 +1,6 @@
-from datetime import date
-
 from flask import Blueprint, request
 
+from core.time_utils import china_today
 from routes.common import json_response, require_client_id
 from services.dashboard_service import get_dashboard_bootstrap
 from services.trading_calendar_service import is_trading_day
@@ -21,7 +20,7 @@ def get_dashboard_bootstrap_view():
 
 @dashboard_bp.route('/api/market/status', methods=['GET'])
 def get_market_status_view():
-    today = date.today()
+    today = china_today()
     return json_response({
         'success': True,
         'date': today.strftime('%Y-%m-%d'),

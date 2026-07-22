@@ -1234,6 +1234,15 @@
     align-items: center;
   }
 
+  .detail-panel__body .subsection-head--trend {
+    grid-template-columns: 1fr;
+    display: flex;
+  }
+
+  .trend-control-row {
+    justify-content: flex-start;
+  }
+
   .detail-transaction-refresh {
     width: auto;
     min-width: 64px;

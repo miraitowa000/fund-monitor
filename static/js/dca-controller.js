@@ -2,7 +2,7 @@ import {
   deleteDcaPlan,
   fetchDcaPlan,
   saveDcaPlan,
-} from './api.js';
+} from './api.js?v=__APP_ASSET_VERSION__';
 
 const { ref, computed, nextTick } = window.Vue;
 

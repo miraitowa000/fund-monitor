@@ -503,6 +503,7 @@
                 <th>当日收益</th>
                 <th>持有收益</th>
                 <th>持仓占比</th>
+                <th v-for="range in performanceRanges" :key="`perf-head-${range.key}`" class="performance-col">[[ range.label ]]</th>
                 <th class="align-right sticky-col sticky-col--action">操作</th>
               </tr>
             </thead>
@@ -598,6 +599,14 @@
                   </div>
                   <div class="cell-muted" v-else>-</div>
                 </td>
+                <td
+                  v-for="range in performanceRanges"
+                  :key="`${fund.code}-${range.key}`"
+                  class="performance-col"
+                  :class="getPerformanceClass(fund, range.key)"
+                >
+                  <div class="cell-main cell-main--performance">[[ formatPerformanceText(fund, range.key) ]]</div>
+                </td>
                 <td class="sticky-col sticky-col--action">
                   <div class="table-actions">
                     <button type="button" class="table-icon-btn danger" title="删除基金" aria-label="删除基金" @click.stop="openDeleteFundModal(fund)">
@@ -615,12 +624,12 @@
             </tbody>
             <tbody v-else-if="loading">
               <tr v-for="n in 5" :key="`fund-skeleton-${n}`">
-                <td v-for="m in 8" :key="m"><div class="skeleton" style="height:14px; width:90px;"></div></td>
+                <td v-for="m in 13" :key="m"><div class="skeleton" style="height:14px; width:90px;"></div></td>
               </tr>
             </tbody>
             <tbody v-else>
               <tr>
-                <td colspan="8">
+                <td colspan="13">
                   <div class="empty-state">当前分组暂无基金，请先添加。</div>
                 </td>
               </tr>
@@ -851,19 +860,27 @@
 
         <div class="detail-panel__body" v-else-if="detailTab === 'history'">
           <template v-if="currentFundCode">
-            <div class="subsection-head">
-              <h3>历史净值</h3>
-              <div class="history-range-tabs">
-                <button
-                  v-for="item in historyRangeOptions"
-                  :key="item.days"
-                  type="button"
-                  class="history-range-tab"
-                  :class="{ active: historyRangeDays === item.days }"
-                  @click="ensureHistoryRange(item.days)"
-                >
-                  [[ item.label ]]
-                </button>
+            <div class="subsection-head subsection-head--trend">
+              <div class="trend-title-block">
+                <h3>业绩走势</h3>
+              </div>
+              <div class="trend-control-row">
+                <div class="history-range-tabs">
+                  <button
+                    v-for="item in historyRangeOptions"
+                    :key="item.days"
+                    type="button"
+                    class="history-range-tab"
+                    :class="{ active: historyRangeDays === item.days }"
+                    @click="ensureHistoryRange(item.days)"
+                  >
+                    [[ item.label ]]
+                  </button>
+                </div>
+                <div class="trend-period-return" :class="getColorClass(historySelectedReturn)">
+                  <span>[[ historySelectedRangeLabel ]]涨跌幅</span>
+                  <strong>[[ historySelectedReturnText ]]</strong>
+                </div>
               </div>
             </div>
             <div id="historyChart" class="chart-surface chart-surface--history"></div>

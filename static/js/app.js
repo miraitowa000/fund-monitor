@@ -5,11 +5,14 @@ import {
   fetchDashboardBootstrap,
   fetchAuthMe,
   fetchDailyEarnings,
+  fetchFundsIntradaySeries,
+  fetchFundsPerformance,
   fetchPortfolio,
   fetchIndexesRaw,
   fetchMarketStatus,
   fetchUserFundsMeta,
   loadFundHistory,
+  loadFundTrendComparison,
   loginAccount,
   moveUserFundGroup,
   renameFundGroup,
@@ -17,26 +20,27 @@ import {
   saveUserFund,
   searchFunds,
   updateUserFundPosition,
-} from './api.js';
+} from './api.js?v=__APP_ASSET_VERSION__';
 import {
   disposeCharts,
   renderHistoryChart,
   renderPortfolioProfitChart,
   resizeDetailCharts
-} from './charts.js';
+} from './charts.js?v=__APP_ASSET_VERSION__';
 import {
   TRADING_MINUTES,
   formatMinuteNow,
   getTodayDate,
+  mergeIntradaySeriesToCache,
   minuteToIndex,
   normalizeToStepMinute,
   readIntradayCache,
   toMinute,
-} from './cache.js';
-import { buildPortfolioViewState } from './dashboard-state.js';
-import { createConversionController } from './conversion-controller.js';
-import { createDetailController } from './detail-modal.js';
-import { createDcaController } from './dca-controller.js';
+} from './cache.js?v=__APP_ASSET_VERSION__';
+import { buildPortfolioViewState } from './dashboard-state.js?v=__APP_ASSET_VERSION__';
+import { createConversionController } from './conversion-controller.js?v=__APP_ASSET_VERSION__';
+import { createDetailController } from './detail-modal.js?v=__APP_ASSET_VERSION__';
+import { createDcaController } from './dca-controller.js?v=__APP_ASSET_VERSION__';
 import {
   EMPTY_DETAIL,
   clearSavedCodes,
@@ -49,33 +53,24 @@ import {
   loadClientId,
   loadSavedCodes,
   saveClientId,
-} from './formatters.js';
-import { createRefreshTimers } from './timers.js';
-import { createTransactionController } from './transaction-controller.js';
+} from './formatters.js?v=__APP_ASSET_VERSION__';
+import { createRefreshTimers } from './timers.js?v=__APP_ASSET_VERSION__';
+import { createTransactionController } from './transaction-controller.js?v=__APP_ASSET_VERSION__';
+import { ensureFreshAppVersion } from './version-guard.js?v=__APP_ASSET_VERSION__';
 
 const THEME_STORAGE_KEY = 'fundMonitorTheme';
 const RELEASE_NOTICE_STORAGE_KEY = 'fundMonitorReleaseNoticeSeen';
-const RELEASE_NOTICE_VERSION = 'release-2026-05-13-trading-earnings';
+const RELEASE_NOTICE_VERSION = 'release-2026-05-25-portfolio-fixes';
 const RELEASE_NOTICE_TITLE = '更新说明';
 const RELEASE_NOTICE_ITEMS = [
-  { id: '1', text: '新增登录注册，支持交易数据按账号保存。' },
-  { id: '2', text: '新增加仓、减仓、定投、转换等交易记录功能。' },
-  { id: '3', text: '新增我的收益，支持按日、月、年查看盈亏。' },
-  { id: '4', text: '优化移动端布局和持仓操作体验。' },
-  { id: '5', text: '修复收益统计、今日走势等展示问题。' }
+  { id: '1', text: '优化今日估值、收益走势图。' },
+  { id: '2', text: '新增区间涨跌幅和业绩对比。' },
+  { id: '3', text: '修复定投、转换确认问题。' }
 ];
 
 const { createApp, ref, onMounted, onUnmounted, computed, nextTick, watch } = window.Vue;
 
-const LUNCH_START_INDEX = minuteToIndex('11:33');
-const LUNCH_END_INDEX = minuteToIndex('12:57');
-
-const isLunchBreakMinute = (minute) => {
-  const [h, m] = String(minute || '').split(':').map((v) => parseInt(v, 10));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
-  const total = h * 60 + m;
-  return total > 690 && total < 780;
-};
+ensureFreshAppVersion();
 
 const app = createApp({
   setup() {
@@ -89,6 +84,8 @@ const app = createApp({
     const activeGroupId = ref('all');
     const funds = ref([]);
     const portfolioItems = ref([]);
+    const fundPerformanceMap = ref({});
+    const performanceLoading = ref(false);
     const fundListVersion = ref(0);
     const portfolioSummary = ref({
       total_holding_amount: 0,
@@ -127,6 +124,7 @@ const app = createApp({
     const historyRangeDays = ref(30);
     const historyLoading = ref(false);
     const historyData = ref({ success: false, data: [] });
+    const historyComparisonData = ref({ success: false, series: [] });
     const historyFundCode = ref('');
     const mobileDetailOpen = ref(false);
     const releaseNoticeOpen = ref(false);
@@ -201,6 +199,7 @@ const app = createApp({
     let indexesRefreshPromise = null;
     let stickyPanelResizeObserver = null;
     let portfolioRenderTimer = null;
+    let performanceLoadTimer = null;
     let latestEarningsRequestId = 0;
     const earningsRangeCache = new Map();
 
@@ -232,6 +231,31 @@ const app = createApp({
       if (!Number.isFinite(n)) return '-';
       return `${formatChange(n * 100, 2)}%`;
     };
+
+    const performanceRanges = [
+      { key: '7d', label: '近1周' },
+      { key: '30d', label: '近1月' },
+      { key: '90d', label: '近3月' },
+      { key: '180d', label: '近6月' },
+      { key: '365d', label: '近1年' },
+    ];
+
+    const getFundPerformanceValue = (fund, key) => {
+      const code = fund && fund.code;
+      const item = code ? fundPerformanceMap.value[code] : null;
+      const ranges = item && item.ranges ? item.ranges : {};
+      const range = ranges[key];
+      const value = range ? parseNumber(range.value) : NaN;
+      return Number.isFinite(value) ? value : null;
+    };
+
+    const formatPerformanceText = (fund, key) => {
+      const value = getFundPerformanceValue(fund, key);
+      if (!Number.isFinite(parseNumber(value))) return performanceLoading.value ? '加载中' : '-';
+      return `${formatChange(value, 2)}%`;
+    };
+
+    const getPerformanceClass = (fund, key) => getColorClass(getFundPerformanceValue(fund, key));
 
     const formatNavValue = (val) => {
       const n = parseNumber(val);
@@ -348,6 +372,7 @@ const app = createApp({
       detailError.value = '';
       detailTab.value = 'overview';
       historyData.value = { success: false, data: [] };
+      historyComparisonData.value = { success: false, series: [] };
       historyFundCode.value = '';
       await fetchData();
     };
@@ -890,6 +915,22 @@ const app = createApp({
       resizeDetailCharts();
     };
 
+    const syncServerIntradaySeries = async (codes) => {
+      const normalizedCodes = Array.from(new Set(
+        (codes || [])
+          .map((code) => String(code || '').padStart(6, '0'))
+          .filter((code) => /^\d{6}$/.test(code))
+      ));
+      if (normalizedCodes.length === 0) return false;
+      try {
+        const result = await fetchFundsIntradaySeries(normalizedCodes);
+        return mergeIntradaySeriesToCache(result?.items || {}, result?.date || getTodayDate());
+      } catch (error) {
+        console.warn('Failed to sync intraday series:', error);
+        return false;
+      }
+    };
+
     const schedulePortfolioProfitRender = () => {
       if (portfolioRenderTimer) {
         clearTimeout(portfolioRenderTimer);
@@ -903,7 +944,11 @@ const app = createApp({
 
     const renderActiveHistoryChart = async () => {
       await nextTick();
-      renderHistoryChart(historyData.value);
+      renderHistoryChart({
+        history: historyData.value,
+        comparison: historyComparisonData.value,
+        transactions: transactions.transactionHistoryItems.value,
+      });
       resizeDetailCharts();
     };
 
@@ -1194,9 +1239,6 @@ const app = createApp({
       const todayCache = cache[getTodayDate()] || {};
       const nowMinute = formatMinuteNow();
       let currentIdx = Math.max(minuteToIndex(nowMinute), 0);
-      if (isLunchBreakMinute(nowMinute)) {
-        currentIdx = Math.max(currentIdx, LUNCH_END_INDEX);
-      }
 
       const totals = labels.map(() => null);
 
@@ -1243,13 +1285,6 @@ const app = createApp({
             continue;
           }
           if (lastKnown !== null) series[i] = lastKnown;
-        }
-
-        const lunchAnchor = series[LUNCH_START_INDEX - 1] ?? series[LUNCH_START_INDEX] ?? null;
-        if (Number.isFinite(lunchAnchor) && currentIdx >= LUNCH_START_INDEX) {
-          for (let i = LUNCH_START_INDEX; i <= Math.min(LUNCH_END_INDEX, currentIdx); i += 1) {
-            series[i] = lunchAnchor;
-          }
         }
 
         if (knownIndexes.length === 1) {
@@ -1311,6 +1346,23 @@ const app = createApp({
       { label: '半年', days: 180 },
       { label: '一年', days: 365 }
     ];
+
+    const historySelectedRangeLabel = computed(() => (
+      historyRangeOptions.find((item) => item.days === historyRangeDays.value)?.label || ''
+    ));
+
+    const historySelectedReturn = computed(() => {
+      const fundSeries = (historyComparisonData.value?.series || []).find((item) => item.key === 'fund');
+      const rows = Array.isArray(fundSeries?.data) ? fundSeries.data : [];
+      const value = rows.length ? parseNumber(rows[rows.length - 1]?.value) : NaN;
+      return Number.isFinite(value) ? value : null;
+    });
+
+    const historySelectedReturnText = computed(() => {
+      const value = historySelectedReturn.value;
+      if (!Number.isFinite(parseNumber(value))) return '-';
+      return `${formatChange(value, 2)}%`;
+    });
 
     const selectedFundQuote = computed(() => (
       (funds.value || []).find((item) => item.code === currentFundCode.value) || null
@@ -1389,6 +1441,27 @@ const app = createApp({
       return nextState.items;
     };
 
+    const loadFundPerformance = async (codes) => {
+      const normalizedCodes = Array.from(new Set(
+        (codes || [])
+          .map((code) => String(code || '').padStart(6, '0'))
+          .filter((code) => /^\d{6}$/.test(code))
+      ));
+      if (normalizedCodes.length === 0) {
+        fundPerformanceMap.value = {};
+        return;
+      }
+      performanceLoading.value = true;
+      try {
+        const result = await fetchFundsPerformance(normalizedCodes, [7, 30, 90, 180, 365]);
+        fundPerformanceMap.value = result && result.items ? result.items : {};
+      } catch (error) {
+        console.error('加载区间涨跌幅失败:', error);
+      } finally {
+        performanceLoading.value = false;
+      }
+    };
+
     const applyBootstrapPayload = (payload) => {
       const snapshot = payload?.snapshot || {};
       const portfolio = payload?.portfolio || {};
@@ -1418,7 +1491,10 @@ const app = createApp({
           loading.value = true;
         }
         try {
-          applyPortfolioPayload(await fetchPortfolio(clientId.value));
+          const items = applyPortfolioPayload(await fetchPortfolio(clientId.value));
+          const positionCodes = items.filter((item) => item?.has_position).map((item) => item.code);
+          const changed = await syncServerIntradaySeries(positionCodes);
+          if (changed) fundListVersion.value += 1;
           lastUpdateTime.value = new Date().toLocaleTimeString();
           await renderPortfolioProfitVisuals();
         } catch (error) {
@@ -1479,6 +1555,9 @@ const app = createApp({
       try {
         const legacyCodes = loadSavedCodes();
         const quoteList = applyBootstrapPayload(await fetchDashboardBootstrap(clientId.value, legacyCodes));
+        const positionCodes = quoteList.filter((item) => item?.has_position).map((item) => item.code);
+        const changed = await syncServerIntradaySeries(positionCodes);
+        if (changed) fundListVersion.value += 1;
         lastUpdateTime.value = new Date().toLocaleTimeString();
 
         if (currentFundCode.value) {
@@ -1493,6 +1572,7 @@ const app = createApp({
             detailTab.value = 'overview';
             pendingFundCode.value = '';
             historyData.value = { success: false, data: [] };
+            historyComparisonData.value = { success: false, series: [] };
             historyFundCode.value = '';
           }
         }
@@ -1503,6 +1583,7 @@ const app = createApp({
 
         if (currentFundCode.value && historyRangeDays.value === 30) {
           historyData.value = detailFund.value?.history || { success: false, data: [] };
+          historyComparisonData.value = { success: false, series: [] };
           historyFundCode.value = currentFundCode.value;
         }
 
@@ -1511,6 +1592,11 @@ const app = createApp({
         }
 
         schedulePortfolioProfitRender();
+        if (performanceLoadTimer) clearTimeout(performanceLoadTimer);
+        performanceLoadTimer = setTimeout(() => {
+          performanceLoadTimer = null;
+          loadFundPerformance(quoteList.map((item) => item.code));
+        }, 800);
       } finally {
         loading.value = false;
       }
@@ -1530,7 +1616,8 @@ const app = createApp({
       funds,
       nextTick,
       hasLoadedAnyDetail,
-      pendingFundCode
+      pendingFundCode,
+      syncServerIntradaySeries
     });
 
     const loadCurrentDetailTransactions = async () => {
@@ -1576,6 +1663,7 @@ const app = createApp({
       historyRangeDays.value = 30;
       historyFundCode.value = code;
       historyData.value = detailFund.value?.history || { success: false, data: [] };
+      historyComparisonData.value = { success: false, series: [] };
       if (detailTab.value === 'overview') await renderDetailVisuals();
       if (detailTab.value === 'history') await ensureHistoryRange(30);
       if (detailTab.value === 'transactions') await loadCurrentDetailTransactions();
@@ -1584,26 +1672,26 @@ const app = createApp({
     const ensureHistoryRange = async (days) => {
       const code = currentFundCode.value;
       if (!code) return;
-      if (historyRangeDays.value === days && historyFundCode.value === code && historyData.value?.data?.length) {
+      if (historyRangeDays.value === days && historyFundCode.value === code && historyComparisonData.value?.success) {
         if (detailTab.value === 'history') await renderActiveHistoryChart();
         return;
       }
 
       historyRangeDays.value = days;
-      if (days === 30 && detailFund.value?.history?.data?.length) {
-        historyData.value = detailFund.value.history;
-        historyFundCode.value = code;
-        if (detailTab.value === 'history') await renderActiveHistoryChart();
-        return;
-      }
-
       const requestId = latestHistoryRequestId + 1;
       latestHistoryRequestId = requestId;
       historyLoading.value = true;
       try {
-        const data = await loadFundHistory(code, days);
+        const [data, comparison] = await Promise.all([
+          days === 30 && detailFund.value?.history?.data?.length
+            ? Promise.resolve(detailFund.value.history)
+            : loadFundHistory(code, days),
+          loadFundTrendComparison(code, days),
+          loadCurrentDetailTransactions(),
+        ]);
         if (requestId !== latestHistoryRequestId || currentFundCode.value !== code) return;
         historyData.value = data && Array.isArray(data.data) ? data : { success: false, data: [] };
+        historyComparisonData.value = comparison && Array.isArray(comparison.series) ? comparison : { success: false, series: [] };
         historyFundCode.value = code;
         if (detailTab.value === 'history') await renderActiveHistoryChart();
       } finally {
@@ -2032,6 +2120,7 @@ const app = createApp({
         detailError.value = '';
         detailTab.value = 'overview';
         historyData.value = { success: false, data: [] };
+        historyComparisonData.value = { success: false, series: [] };
         historyFundCode.value = '';
         closeMobileDetail();
       }
@@ -2053,6 +2142,7 @@ const app = createApp({
         detailError.value = '';
         detailTab.value = 'overview';
         historyData.value = { success: false, data: [] };
+        historyComparisonData.value = { success: false, series: [] };
         historyFundCode.value = '';
         closeMobileDetail();
       } finally {
@@ -2147,6 +2237,10 @@ const app = createApp({
       if (portfolioRenderTimer) {
         clearTimeout(portfolioRenderTimer);
         portfolioRenderTimer = null;
+      }
+      if (performanceLoadTimer) {
+        clearTimeout(performanceLoadTimer);
+        performanceLoadTimer = null;
       }
       disposeCharts();
       if (resizeHandler) {
@@ -2257,8 +2351,14 @@ const app = createApp({
       historyRangeOptions,
       historyLoading,
       historyData,
+      historyComparisonData,
+      historySelectedRangeLabel,
+      historySelectedReturn,
+      historySelectedReturnText,
       mobileDetailOpen,
       portfolioItems,
+      performanceLoading,
+      performanceRanges,
       portfolioSummary,
       positionForm,
       quickSearchInput,
@@ -2468,8 +2568,10 @@ const app = createApp({
       getDisplayUnitNav,
       formatNavValue,
       formatPercentText,
+      formatPerformanceText,
       formatChange,
       getColorClass,
+      getPerformanceClass,
       getIndexCardClass,
       showDetail,
       closeMobileDetail,

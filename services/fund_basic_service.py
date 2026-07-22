@@ -3,19 +3,25 @@ import re
 import threading
 import time
 from concurrent.futures import Future, wait as futures_wait
-from datetime import datetime
 from functools import lru_cache
 
 from core.cache import cache_get, cache_get_age, cache_get_stale, cache_prune, cache_set
 from core.http import http_get
 from core.perf_metrics import increment_metric
 from core.runtime import BG_REFRESH_EXECUTOR, FUNDS_EXECUTOR, get_inflight_basic, get_watched_codes, prune_watched_codes, set_inflight_basic
+from core.time_utils import china_now, timestamp_to_china_datetime
+from services.fund_valuation_service import get_fund_valuation
 from services.quote_cache_service import (
     acquire_basic_quote_refresh_lock,
     get_basic_quote,
     get_stale_basic_quote,
     release_basic_quote_refresh_lock,
     set_basic_quote,
+)
+from services.intraday_series_service import (
+    get_active_position_fund_codes,
+    is_intraday_collection_open,
+    record_intraday_snapshots,
 )
 
 try:
@@ -63,6 +69,7 @@ def _build_basic_payload(
     display_date='-',
     confirmed_date='-',
     base_date='-',
+    quote_source='',
 ):
     return {
         'code': code,
@@ -80,6 +87,7 @@ def _build_basic_payload(
         'display_date': display_date,
         'confirmed_date': confirmed_date,
         'base_date': base_date,
+        'quote_source': quote_source,
     }
 
 
@@ -244,7 +252,7 @@ def get_pingzhongdata_snapshot(fund_code):
 
         def _fmt_date(item):
             try:
-                return datetime.fromtimestamp(float(item.get('x')) / 1000).strftime('%Y-%m-%d')
+                return timestamp_to_china_datetime(float(item.get('x')) / 1000).strftime('%Y-%m-%d')
             except Exception:
                 return ''
 
@@ -252,6 +260,9 @@ def get_pingzhongdata_snapshot(fund_code):
             'code': extract_string('fS_code') or code,
             'name': extract_string('fS_name'),
             'networth': networth,
+            'grand_total': extract_json('Data_grandTotal') or [],
+            'rate_in_similar_type': extract_json('Data_rateInSimilarType') or [],
+            'rate_in_similar_percent': extract_json('Data_rateInSimilarPersent') or [],
             'latest_date': _fmt_date(latest) if isinstance(latest, dict) else '',
             'latest_value': str(round(float(latest.get('y')), 4)) if isinstance(latest, dict) and latest.get('y') not in (None, '') else '-',
             'latest_change': f"{float(latest.get('equityReturn', 0)):.2f}" if isinstance(latest, dict) and latest.get('equityReturn') not in (None, '') else '-',
@@ -300,6 +311,7 @@ def _build_snapshot_estimate(code, fallback_name, snapshot, message):
         display_date=latest_date or '-',
         confirmed_date=latest_date or '-',
         base_date=snapshot.get('previous_date', latest_date) if snapshot else '-',
+        quote_source='history_fallback',
     ))
 
 
@@ -329,7 +341,7 @@ def _load_pingzhong_fallback(code, fallback_name, message):
 
 def _is_trading_hours():
     """判断当前是否在交易时段（周一到周五 9:30-11:30, 13:00-15:00）"""
-    now = datetime.now()
+    now = china_now()
     # 周末不交易（0=周一, 6=周日）
     if now.weekday() >= 5:
         return False
@@ -362,7 +374,7 @@ def _date_text(date_text):
 def _should_use_stale_basic(stale):
     if not stale:
         return False
-    now = datetime.now()
+    now = china_now()
     if now.weekday() >= 5:
         return True
 
@@ -399,7 +411,7 @@ def _sync_confirmation_fields(result):
 
 
 def _enrich_confirmed_nav(code, result):
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = china_now().strftime('%Y-%m-%d')
     fund_name = result.get('name', '')
 
     # 判断是否需要查询历史接口
@@ -441,34 +453,32 @@ def _enrich_confirmed_nav(code, result):
 def get_fund_estimate(fund_code):
     code = str(fund_code).zfill(6)
     fallback_name = get_fund_name_by_code(code) or code
-    try:
-        response = http_get(
-            f"http://fundgz.1234567.com.cn/js/{code}.js?rt={int(time.time() * 1000)}",
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'Referer': 'http://fund.eastmoney.com/'},
-            timeout=3,
+    valuation = get_fund_valuation(code)
+    today = china_now().strftime('%Y-%m-%d')
+    if not valuation:
+        return _load_pingzhong_fallback(code, fallback_name, '东方财富净值估算接口暂无数据')
+    if valuation.get('display_date') != today:
+        return _load_pingzhong_fallback(
+            code,
+            valuation.get('name') or fallback_name,
+            f'东方财富净值估算尚未更新至 {today}',
         )
-        if response.status_code != 200:
-            return _load_pingzhong_fallback(code, fallback_name, '实时估值接口不可用')
-        match = re.search(r'({.*})', response.text)
-        if not match:
-            return _load_pingzhong_fallback(code, fallback_name, '实时估值返回异常')
-        data = json.loads(match.group(1))
-        result = _build_basic_payload(
-            code=data.get('fundcode') or code,
-            name=data.get('name') or fallback_name,
-            gsz=data.get('gsz'),
-            gszzl=data.get('gszzl'),
-            gztime=data.get('gztime'),
-            dwjz=data.get('dwjz'),
-            jzrq=data.get('jzrq'),
-            success=True,
-            display_date=_date_text(data.get('gztime')),
-            confirmed_date=_date_text(data.get('jzrq')),
-            base_date=_date_text(data.get('jzrq')),
-        )
-        return _enrich_confirmed_nav(code, result)
-    except Exception as e:
-        return _load_pingzhong_fallback(code, fallback_name, f'实时估值请求失败: {e}')
+
+    result = _build_basic_payload(
+        code=valuation.get('code') or code,
+        name=valuation.get('name') or fallback_name,
+        gsz=valuation.get('gsz'),
+        gszzl=valuation.get('gszzl'),
+        gztime=valuation.get('gztime'),
+        dwjz=valuation.get('dwjz'),
+        jzrq=valuation.get('jzrq'),
+        success=True,
+        display_date=valuation.get('display_date'),
+        confirmed_date=valuation.get('confirmed_date'),
+        base_date=valuation.get('base_date'),
+        quote_source=valuation.get('quote_source') or 'eastmoney_guzhi',
+    )
+    return _enrich_confirmed_nav(code, result)
 
 
 def _fetch_and_cache_basic(code):
@@ -633,7 +643,9 @@ def fetch_funds_parallel(codes, request_timeout=15):
                 code = future_to_code[future]
                 stale = cache_get_stale('basic', code)
                 results_map[code] = stale if _should_use_stale_basic(stale) else build_timeout_placeholder(code)
-    return [results_map.get(code) for code in norm_codes]
+    results = [results_map.get(code) for code in norm_codes]
+    record_intraday_snapshots(results)
+    return results
 
 
 def _background_refresh_loop():
@@ -647,6 +659,8 @@ def _background_refresh_loop():
         cache_prune('related_etf', TTL_RELATED_ETF_SECONDS * 4)
         prune_watched_codes()
         codes = get_watched_codes()
+        if is_intraday_collection_open():
+            codes = list(dict.fromkeys([*codes, *get_active_position_fund_codes()]))
         if not codes:
             continue
         futures = [
@@ -656,6 +670,10 @@ def _background_refresh_loop():
         ]
         if futures:
             futures_wait(futures, timeout=15)
+            record_intraday_snapshots([
+                cache_get('basic', code, TTL_BASIC_SECONDS) or get_stale_basic_quote(code)
+                for code in codes
+            ])
 
 
 def start_background_refresh_thread():

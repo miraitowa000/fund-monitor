@@ -1,17 +1,24 @@
 export const INTRADAY_CACHE_KEY = 'fundIntradaySnapshotsV1';
 export const INTRADAY_STEP_MINUTES = 3;
 
+const MORNING_START_MINUTE = 9 * 60 + 30;
+const MORNING_END_MINUTE = 11 * 60 + 30;
+const AFTERNOON_START_MINUTE = 13 * 60;
+const AFTERNOON_END_MINUTE = 15 * 60;
+
+const minuteText = (totalMinutes) => {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
 export const TRADING_MINUTES = (() => {
   const list = [];
-  let h = 9;
-  let m = 30;
-  while (h < 15 || (h === 15 && m === 0)) {
-    list.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    m += INTRADAY_STEP_MINUTES;
-    if (m >= 60) {
-      h += 1;
-      m = 0;
-    }
+  for (let minute = MORNING_START_MINUTE; minute <= MORNING_END_MINUTE; minute += INTRADAY_STEP_MINUTES) {
+    list.push(minuteText(minute));
+  }
+  for (let minute = AFTERNOON_START_MINUTE + INTRADAY_STEP_MINUTES; minute <= AFTERNOON_END_MINUTE; minute += INTRADAY_STEP_MINUTES) {
+    list.push(minuteText(minute));
   }
   return list;
 })();
@@ -37,7 +44,14 @@ export const minuteToIndex = (minute) => {
   if (!m) return -1;
   const [h, mm] = m.split(':').map((v) => parseInt(v, 10));
   if (!Number.isFinite(h) || !Number.isFinite(mm)) return -1;
-  const raw = (h - 9) * 60 + (mm - 30);
+  const total = h * 60 + mm;
+  let raw = total - MORNING_START_MINUTE;
+  if (total > MORNING_END_MINUTE && total <= AFTERNOON_START_MINUTE) {
+    raw = MORNING_END_MINUTE - MORNING_START_MINUTE;
+  } else if (total > AFTERNOON_START_MINUTE) {
+    raw = (MORNING_END_MINUTE - MORNING_START_MINUTE)
+      + (total - AFTERNOON_START_MINUTE);
+  }
   const idx = Math.floor(raw / INTRADAY_STEP_MINUTES);
   if (idx < 0) return 0;
   if (idx >= TRADING_MINUTES.length) return TRADING_MINUTES.length - 1;
@@ -50,9 +64,7 @@ export const normalizeToStepMinute = (minute) => {
   const [rawH, rawM] = m.split(':').map((v) => parseInt(v, 10));
   if (!Number.isFinite(rawH) || !Number.isFinite(rawM)) return '';
   const bucket = Math.floor((rawH * 60 + rawM) / INTRADAY_STEP_MINUTES) * INTRADAY_STEP_MINUTES;
-  const h = Math.floor(bucket / 60);
-  const mm = bucket % 60;
-  const normalized = `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  const normalized = bucket === AFTERNOON_START_MINUTE ? '11:30' : minuteText(bucket);
   return TRADING_MINUTES[minuteToIndex(normalized)] || normalized;
 };
 
@@ -68,6 +80,36 @@ export const readIntradayCache = () => {
 
 export const writeIntradayCache = (data) => {
   localStorage.setItem(INTRADAY_CACHE_KEY, JSON.stringify(data));
+};
+
+export const mergeIntradaySeriesToCache = (seriesMap, dateText = getTodayDate()) => {
+  if (!seriesMap || typeof seriesMap !== 'object') return false;
+  const cache = readIntradayCache();
+  Object.keys(cache).forEach((d) => {
+    if (d !== dateText) delete cache[d];
+  });
+  cache[dateText] = cache[dateText] || {};
+  let changed = false;
+
+  Object.keys(seriesMap).forEach((code) => {
+    const normalizedCode = String(code || '').padStart(6, '0');
+    const points = seriesMap[code];
+    if (!/^\d{6}$/.test(normalizedCode) || !points || typeof points !== 'object') return;
+    const codeMap = cache[dateText][normalizedCode] || {};
+    Object.keys(points).forEach((minute) => {
+      const normalizedMinute = normalizeToStepMinute(minute);
+      const nav = parseFloat(points[minute]);
+      if (!normalizedMinute || !Number.isFinite(nav)) return;
+      if (codeMap[normalizedMinute] !== nav) {
+        codeMap[normalizedMinute] = nav;
+        changed = true;
+      }
+    });
+    cache[dateText][normalizedCode] = codeMap;
+  });
+
+  if (changed) writeIntradayCache(cache);
+  return changed;
 };
 
 export const saveFundSnapshotsToCache = (fundList) => {

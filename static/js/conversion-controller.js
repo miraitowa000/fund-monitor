@@ -2,7 +2,7 @@ import {
   createFundConversion,
   previewFundConversion,
   searchFunds,
-} from './api.js';
+} from './api.js?v=__APP_ASSET_VERSION__';
 
 const { ref, computed } = window.Vue;
 

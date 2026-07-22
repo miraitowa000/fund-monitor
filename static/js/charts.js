@@ -5,7 +5,7 @@ import {
   minuteToIndex,
   normalizeToStepMinute,
   readIntradayCache,
-} from './cache.js';
+} from './cache.js?v=__APP_ASSET_VERSION__';
 
 let intradayChartInstance = null;
 let historyChartInstance = null;
@@ -38,15 +38,7 @@ const clearChartHost = (chart, chartEl) => {
   }
 };
 
-const LUNCH_START_INDEX = minuteToIndex('11:33');
-const LUNCH_END_INDEX = minuteToIndex('12:57');
-
-const isLunchBreak = (minute) => {
-  const [h, m] = String(minute || '').split(':').map((v) => parseInt(v, 10));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
-  const total = h * 60 + m;
-  return total > 690 && total < 780;
-};
+const formatIntradayAxisLabel = (value) => (value === '11:30' ? '11:30/13:00' : value);
 
 const buildIntradaySeries = (fundCode, intradayFallback) => {
   const labels = TRADING_MINUTES.slice();
@@ -110,17 +102,6 @@ const buildIntradaySeries = (fundCode, intradayFallback) => {
     for (let i = 0; i < firstKnown.idx; i += 1) {
       values[i] = firstKnown.value;
     }
-  }
-
-  const lunchAnchor = values[LUNCH_START_INDEX - 1] ?? values[LUNCH_START_INDEX] ?? lastKnown;
-  if (Number.isFinite(lunchAnchor)) {
-    for (let i = LUNCH_START_INDEX; i <= LUNCH_END_INDEX; i += 1) {
-      values[i] = lunchAnchor;
-    }
-  }
-
-  if (isLunchBreak(nowMinute)) {
-    currentIdx = Math.max(currentIdx, LUNCH_END_INDEX);
   }
 
   for (let i = currentIdx + 1; i < values.length; i += 1) {
@@ -197,7 +178,7 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
         showMinLabel: true,
         showMaxLabel: true,
         hideOverlap: false,
-        formatter: (value) => value
+        formatter: formatIntradayAxisLabel
       }
     },
     yAxis: {
@@ -218,41 +199,215 @@ export const renderIntradayChart = (fundCode, basic, intradayData) => {
   }, true);
 };
 
-export const renderHistoryChart = (historyData) => {
+const normalizeHistoryChartPayload = (payload) => {
+  if (payload && (payload.history || payload.comparison || payload.transactions)) {
+    return payload;
+  }
+  return { history: payload, comparison: null, transactions: [] };
+};
+
+const parseNumber = (value) => {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : NaN;
+};
+
+const buildFundReturnSeries = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const base = parseNumber(rows[0]?.value);
+  if (!Number.isFinite(base) || base <= 0) return [];
+  return rows.map((row) => ({
+    date: row.date,
+    value: Number((((parseNumber(row.value) - base) / base) * 100).toFixed(2)),
+  })).filter((row) => row.date && Number.isFinite(row.value));
+};
+
+const normalizeTradeType = (type) => String(type || '').toUpperCase();
+
+const isBuyTrade = (item) => ['BUY', 'SIP_BUY', 'CONVERT_IN'].includes(normalizeTradeType(item?.type));
+
+const isSellTrade = (item) => ['SELL', 'CONVERT_OUT'].includes(normalizeTradeType(item?.type));
+
+const tradeDateOf = (item) => String(
+  item?.status === 'PENDING'
+    ? (item?.nav_date || item?.trade_date || item?.submitted_date || '')
+    : (item?.nav_date || item?.trade_date || item?.submitted_date || '')
+).slice(0, 10);
+
+const formatTradeAmount = (value) => {
+  const n = parseNumber(value);
+  if (!Number.isFinite(n)) return '-';
+  return `CNY ${n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const buildTradePoints = (transactions, valueByDate, type) => {
+  const rows = [];
+  (transactions || []).forEach((item) => {
+    const isTarget = type === 'buy' ? isBuyTrade(item) : isSellTrade(item);
+    if (!isTarget) return;
+    const date = tradeDateOf(item);
+    const value = valueByDate.get(date);
+    if (!date || !Number.isFinite(value)) return;
+    rows.push({
+      value: [date, value],
+      transaction: item,
+      pending: item?.status === 'PENDING',
+    });
+  });
+  return rows;
+};
+
+const tradeTooltip = (point) => {
+  const tx = point?.data?.transaction || {};
+  const label = isSellTrade(tx) ? '卖出' : (tx.is_dca ? '定投' : '买入');
+  const status = tx.status === 'PENDING' ? '待确认' : '已确认';
+  const date = tradeDateOf(tx) || point?.axisValue || '-';
+  return [
+    `${date} ${label} (${status})`,
+    `金额：${formatTradeAmount(tx.amount)}`,
+    `净值：${Number.isFinite(parseNumber(tx.nav)) ? parseNumber(tx.nav).toFixed(4) : '-'}`,
+    `份额：${Number.isFinite(parseNumber(tx.shares)) ? parseNumber(tx.shares).toFixed(2) : '-'}`,
+  ].join('<br/>');
+};
+
+export const renderHistoryChart = (rawPayload) => {
   const chartEl = document.getElementById('historyChart');
   if (!chartEl) return;
 
-  const rows = historyData && Array.isArray(historyData.data) ? historyData.data : [];
-  if (rows.length === 0) {
+  const payload = normalizeHistoryChartPayload(rawPayload);
+  const rows = payload.history && Array.isArray(payload.history.data) ? payload.history.data : [];
+  const comparisonSeries = payload.comparison && Array.isArray(payload.comparison.series) ? payload.comparison.series : [];
+  const fundSeries = comparisonSeries.find((item) => item.key === 'fund')?.data || buildFundReturnSeries(rows);
+  if (fundSeries.length === 0) {
     historyChartInstance = disposeChart(historyChartInstance);
-    renderChartEmpty(chartEl, '暂无历史净值数据。');
+    renderChartEmpty(chartEl, '暂无业绩走势数据。');
     return;
   }
+
+  const labels = fundSeries.map((row) => row.date);
+  const valueByDate = new Map(fundSeries.map((row) => [row.date, row.value]));
+  const comparisonColors = ['#0ea5e9', '#8b949e', '#f97316', '#64748b'];
+  const lineSeries = [{
+    name: '本基金',
+    data: fundSeries.map((row) => [row.date, row.value]),
+    type: 'line',
+    smooth: true,
+    showSymbol: false,
+    connectNulls: true,
+    lineStyle: { width: 2.4, color: '#ef4444' },
+    itemStyle: { color: '#ef4444' },
+    areaStyle: {
+      color: {
+        type: 'linear',
+        x: 0,
+        y: 0,
+        x2: 0,
+        y2: 1,
+        colorStops: [
+          { offset: 0, color: 'rgba(239, 68, 68, 0.14)' },
+          { offset: 1, color: 'rgba(239, 68, 68, 0)' },
+        ],
+      },
+    },
+  }];
+
+  comparisonSeries
+    .filter((item) => item.key !== 'fund' && Array.isArray(item.data) && item.data.length)
+    .forEach((item, index) => {
+      const points = new Map(item.data.map((row) => [row.date, row.value]));
+      lineSeries.push({
+        name: item.name || `对比${index + 1}`,
+        data: labels.map((date) => [date, points.has(date) ? points.get(date) : null]),
+        type: 'line',
+        smooth: true,
+        showSymbol: false,
+        connectNulls: true,
+        lineStyle: { width: 1.6, color: comparisonColors[index % comparisonColors.length] },
+        itemStyle: { color: comparisonColors[index % comparisonColors.length] },
+      });
+    });
+
+  const buyPoints = buildTradePoints(payload.transactions, valueByDate, 'buy');
+  const sellPoints = buildTradePoints(payload.transactions, valueByDate, 'sell');
 
   clearChartHost(historyChartInstance, chartEl);
   historyChartInstance = ensureChartInstance(historyChartInstance, chartEl);
   historyChartInstance.setOption({
+    legend: {
+      data: lineSeries.map((item) => item.name),
+      top: 0,
+      right: 0,
+      itemWidth: 12,
+      itemHeight: 8,
+      textStyle: { color: '#64748b', fontSize: 11 },
+    },
     tooltip: {
       trigger: 'axis',
+      confine: true,
+      appendToBody: true,
+      position: (point, params, dom, rect, size) => {
+        const viewWidth = size.viewSize[0];
+        const viewHeight = size.viewSize[1];
+        const boxWidth = size.contentSize[0];
+        const boxHeight = size.contentSize[1];
+        let x = point[0] + 12;
+        let y = point[1] + 12;
+        if (x + boxWidth > viewWidth) x = point[0] - boxWidth - 12;
+        if (y + boxHeight > viewHeight) y = Math.max(point[1] - boxHeight - 12, 8);
+        return [Math.max(x, 8), Math.max(y, 8)];
+      },
       formatter: (params) => {
         if (!params || params.length === 0) return '';
-        const point = params[0];
-        const row = rows[point.dataIndex] || {};
-        const change = parseFloat(row.change);
-        const changeText = Number.isFinite(change) ? `${change.toFixed(2)}%` : '-';
-        return `${point.axisValue}<br/>单位净值：${Number(point.value).toFixed(4)}<br/>日涨跌幅：${changeText}`;
+        const lines = [`${params[0].axisValue}`];
+        params.forEach((point) => {
+          if (point.seriesType === 'scatter') {
+            lines.push(tradeTooltip(point));
+            return;
+          }
+          const value = Array.isArray(point.value) ? point.value[1] : point.value;
+          if (Number.isFinite(parseNumber(value))) {
+            lines.push(`${point.marker}${point.seriesName}：${parseNumber(value).toFixed(2)}%`);
+          }
+        });
+        return lines.join('<br/>');
       }
     },
-    grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
-    xAxis: { type: 'category', data: rows.map((row) => row.date), boundaryGap: false },
-    yAxis: { type: 'value', scale: true },
-    series: [{
-      data: rows.map((row) => Number(parseFloat(row.value || 0).toFixed(4))),
-      type: 'line',
-      smooth: true,
-      showSymbol: false,
-      lineStyle: { width: 2, color: '#1677ff' }
-    }]
+    grid: { left: '3%', right: '4%', bottom: '3%', top: 34, containLabel: true },
+    xAxis: { type: 'category', data: labels, boundaryGap: false },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: { formatter: '{value}%' },
+      splitLine: { lineStyle: { color: 'rgba(148, 163, 184, 0.16)' } },
+    },
+    series: [
+      ...lineSeries,
+      {
+        name: '买入',
+        type: 'scatter',
+        legendHoverLink: false,
+        data: buyPoints,
+        symbolSize: (value, params) => params?.data?.pending ? 7 : 8,
+        itemStyle: {
+          color: (params) => params?.data?.pending ? 'rgba(239, 68, 68, 0.32)' : '#ef4444',
+          borderColor: '#fff',
+          borderWidth: 1.5,
+        },
+        z: 8,
+      },
+      {
+        name: '卖出',
+        type: 'scatter',
+        legendHoverLink: false,
+        data: sellPoints,
+        symbolSize: (value, params) => params?.data?.pending ? 7 : 8,
+        itemStyle: {
+          color: (params) => params?.data?.pending ? 'rgba(22, 163, 74, 0.32)' : '#16a34a',
+          borderColor: '#fff',
+          borderWidth: 1.5,
+        },
+        z: 8,
+      },
+    ],
   }, true);
 };
 
@@ -312,8 +467,8 @@ export const renderPortfolioProfitChart = (chartData) => {
         fontSize: mobile ? 10 : 12,
         margin: mobile ? 10 : 12,
         formatter: (value) => {
-          if (!mobile) return value;
-          return mobileTicks.has(value) ? value : '';
+          if (!mobile) return formatIntradayAxisLabel(value);
+          return mobileTicks.has(value) ? formatIntradayAxisLabel(value) : '';
         }
       },
       axisTick: { show: false }

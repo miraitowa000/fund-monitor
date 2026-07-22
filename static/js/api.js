@@ -23,6 +23,29 @@ export const loadFundHistory = async (code, days) => {
   return await response.json();
 };
 
+export const loadFundTrendComparison = async (code, days) => {
+  const response = await fetch(`/api/fund/${code}/trend-comparison?days=${days}`);
+  return await response.json();
+};
+
+export const fetchFundsPerformance = async (codes = [], ranges = [7, 30, 90, 180, 365]) => {
+  const response = await fetch('/api/funds/performance', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ codes, ranges })
+  });
+  return await response.json();
+};
+
+export const fetchFundsIntradaySeries = async (codes = []) => {
+  const response = await fetch('/api/funds/intraday-series', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ codes })
+  });
+  return await response.json();
+};
+
 export const searchFunds = async (keyword, limit = 10) => {
   const q = String(keyword || '').trim();
   if (!q) return [];
