@@ -46,6 +46,39 @@ class FundValuationServiceTests(unittest.TestCase):
         service._VALUATION_CACHE = {}
         service._VALUATION_CACHE_REFRESHED_AT = 0.0
         service._VALUATION_LAST_ATTEMPT_AT = 0.0
+        service._SINA_VALUATION_CACHE = {}
+        service._SINA_VALUATION_REFRESHED_AT = {}
+        service._SINA_VALUATION_LAST_ATTEMPT_AT = {}
+
+    def test_parse_sina_fund_quote(self):
+        text = (
+            'var hq_str_fu_018957="中航机遇领航混合发起C,11:31:00,4.3211,'
+            '4.2787,4.2787,-0.0231,0.991,2026-07-27,4.3265,1.1172";'
+        )
+
+        result = service._parse_sina_valuation(text, '018957')
+
+        self.assertEqual(result, {
+            'code': '018957',
+            'name': '中航机遇领航混合发起C',
+            'gsz': '4.3211',
+            'gszzl': '0.991',
+            'gztime': '2026-07-27 11:31:00',
+            'dwjz': '4.2787',
+            'jzrq': '-',
+            'display_date': '2026-07-27',
+            'confirmed_date': '-',
+            'base_date': '-',
+            'quote_source': 'sina_fund_valuation',
+        })
+
+    def test_sina_quote_rejects_inconsistent_change(self):
+        text = (
+            'var hq_str_fu_018957="test fund,11:31:00,4.3211,4.2787,'
+            '4.2787,-0.0231,-9.99,2026-07-27,4.3265,1.1172";'
+        )
+
+        self.assertIsNone(service._parse_sina_valuation(text, '018957'))
 
     def test_parse_maps_new_api_to_existing_quote_fields(self):
         observed_at = datetime(2026, 7, 21, 11, 49, 2, tzinfo=CHINA_TZ)
@@ -67,8 +100,9 @@ class FundValuationServiceTests(unittest.TestCase):
             'quote_source': 'eastmoney_guzhi',
         })
 
+    @patch.object(service, '_get_sina_valuation', return_value=None)
     @patch.object(service, 'http_get', return_value=FakeResponse())
-    def test_process_cache_fetches_full_list_once(self, http_get):
+    def test_process_cache_fetches_full_list_once(self, http_get, _get_sina_valuation):
         first = service.get_fund_valuation('018957')
         second = service.get_fund_valuation('018957')
 

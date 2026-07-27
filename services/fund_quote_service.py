@@ -103,6 +103,8 @@ def get_realtime_stock_quotes(stock_items):
                     quote_name = parts[1].strip() if len(parts) > 1 else parts[0].strip()
                     latest_price = float(parts[6])
                     change_pct = float(parts[8]) if len(parts) > 8 and parts[8] not in ('', 'None') else ((latest_price - float(parts[3])) / float(parts[3]) * 100 if float(parts[3]) else 0.0)
+                    quote_date = parts[17].strip() if len(parts) > 17 else ''
+                    quote_time = parts[18].strip() if len(parts) > 18 else ''
                 except Exception:
                     continue
             else:
@@ -111,12 +113,20 @@ def get_realtime_stock_quotes(stock_items):
                     prev_close = float(parts[2])
                     latest_price = float(parts[3])
                     change_pct = ((latest_price - prev_close) / prev_close * 100) if prev_close else 0.0
+                    quote_date = parts[30].strip() if len(parts) > 30 else ''
+                    quote_time = parts[31].strip() if len(parts) > 31 else ''
                 except Exception:
                     continue
                 code6 = _normalize_code6(symbol[2:] if symbol.startswith(('sh', 'sz', 'bj')) else symbol)
             if not code6 or latest_price is None or change_pct is None:
                 continue
-            payload = {'name': quote_name, 'price': f"{latest_price:.2f}", 'change_pct': f"{change_pct:.2f}"}
+            payload = {
+                'name': quote_name,
+                'price': f"{latest_price:.2f}",
+                'change_pct': f"{change_pct:.2f}",
+                'quote_date': quote_date,
+                'quote_time': quote_time,
+            }
             for alias in symbol_aliases.get(symbol, set()):
                 result[alias] = payload
                 normalized_alias = _normalize_code6(alias)

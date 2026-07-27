@@ -315,8 +315,8 @@ def _build_snapshot_estimate(code, fallback_name, snapshot, message):
     ))
 
 
-def _load_pingzhong_fallback(code, fallback_name, message):
-    snapshot = get_pingzhongdata_snapshot(code)
+def _load_pingzhong_fallback(code, fallback_name, message, snapshot=None):
+    snapshot = snapshot or get_pingzhongdata_snapshot(code)
     if snapshot and snapshot.get('name'):
         fallback_name = snapshot.get('name') or fallback_name
     if snapshot and _is_qdii_like_snapshot(snapshot):
@@ -337,6 +337,94 @@ def _load_pingzhong_fallback(code, fallback_name, message):
         confirmed_date=snapshot.get('latest_date', '-') if snapshot else '-',
         base_date=snapshot.get('latest_date', '-') if snapshot else '-',
     )
+
+
+def _parse_number(value):
+    match = re.search(r'-?\d+(?:\.\d+)?', str(value or ''))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_holdings_estimate(code, fallback_name, snapshot, direct_source_message):
+    if not snapshot or _is_qdii_like_snapshot(snapshot):
+        return None
+
+    base_nav = _parse_number(snapshot.get('latest_value'))
+    base_date = _date_text(snapshot.get('latest_date'))
+    if base_nav is None or base_nav <= 0 or base_date == '-':
+        return None
+
+    try:
+        # Lazy import avoids the fund detail/basic service import cycle.
+        from services.fund_detail_service import get_fund_holdings
+
+        holdings_result = cache_get('holdings', code, TTL_HOLDINGS_SECONDS)
+        if not holdings_result:
+            holdings_result = get_fund_holdings(code)
+            if holdings_result and holdings_result.get('success'):
+                cache_set('holdings', code, holdings_result)
+    except Exception:
+        return None
+    if not holdings_result or not holdings_result.get('success'):
+        return None
+
+    today = china_now().strftime('%Y-%m-%d')
+    weighted_change = 0.0
+    coverage = 0.0
+    quote_count = 0
+    quote_times = []
+    holdings = holdings_result.get('holdings') or []
+    holding_count = len(holdings)
+    for item in holdings:
+        weight = _parse_number(item.get('pct'))
+        change = _parse_number(item.get('change_pct'))
+        quote_date = _date_text(item.get('quote_date'))
+        if weight is None or weight <= 0 or change is None or quote_date != today:
+            continue
+        weighted_change += weight * change / 100
+        coverage += weight
+        quote_count += 1
+        quote_time = str(item.get('quote_time') or '').strip()
+        if re.fullmatch(r'\d{2}:\d{2}:\d{2}', quote_time):
+            quote_times.append(quote_time)
+
+    if quote_count < 5 or coverage < 20 or coverage > 100.5:
+        return None
+
+    estimated_nav = base_nav * (1 + weighted_change / 100)
+    if estimated_nav <= 0:
+        return None
+
+    report_date = _date_text(holdings_result.get('date'))
+    report_label = report_date if report_date != '-' else '最近披露期'
+    quote_time = max(quote_times) if quote_times else china_now().strftime('%H:%M:%S')
+    result = _build_basic_payload(
+        code=code,
+        name=snapshot.get('name') or fallback_name,
+        gsz=f'{estimated_nav:.4f}',
+        gszzl=f'{weighted_change:.2f}',
+        gztime=f'{today} {quote_time}',
+        dwjz=f'{base_nav:.4f}',
+        jzrq=base_date,
+        success=True,
+        message=(
+            f'{direct_source_message}；按 {report_label} 前十大持仓估算'
+            f'（行情 {quote_count}/{holding_count}，覆盖净值 {coverage:.2f}%）'
+        ),
+        display_date=today,
+        confirmed_date=base_date,
+        base_date=base_date,
+        quote_source='holdings_weighted_estimate',
+    )
+    result['holding_report_date'] = report_date
+    result['holding_coverage'] = round(coverage, 2)
+    result['holding_quote_count'] = quote_count
+    result['holding_count'] = holding_count
+    return _sync_confirmation_fields(result)
 
 
 def _is_trading_hours():
@@ -452,33 +540,47 @@ def _enrich_confirmed_nav(code, result):
 
 def get_fund_estimate(fund_code):
     code = str(fund_code).zfill(6)
-    fallback_name = get_fund_name_by_code(code) or code
     valuation = get_fund_valuation(code)
+    fallback_name = (valuation or {}).get('name') or get_fund_name_by_code(code) or code
     today = china_now().strftime('%Y-%m-%d')
-    if not valuation:
-        return _load_pingzhong_fallback(code, fallback_name, '东方财富净值估算接口暂无数据')
-    if valuation.get('display_date') != today:
-        return _load_pingzhong_fallback(
-            code,
-            valuation.get('name') or fallback_name,
-            f'东方财富净值估算尚未更新至 {today}',
+    if valuation and valuation.get('display_date') == today:
+        result = _build_basic_payload(
+            code=valuation.get('code') or code,
+            name=valuation.get('name') or fallback_name,
+            gsz=valuation.get('gsz'),
+            gszzl=valuation.get('gszzl'),
+            gztime=valuation.get('gztime'),
+            dwjz=valuation.get('dwjz'),
+            jzrq=valuation.get('jzrq'),
+            success=True,
+            display_date=valuation.get('display_date'),
+            confirmed_date=valuation.get('confirmed_date'),
+            base_date=valuation.get('base_date'),
+            quote_source=valuation.get('quote_source') or 'direct_valuation',
         )
+        return _enrich_confirmed_nav(code, result)
 
-    result = _build_basic_payload(
-        code=valuation.get('code') or code,
-        name=valuation.get('name') or fallback_name,
-        gsz=valuation.get('gsz'),
-        gszzl=valuation.get('gszzl'),
-        gztime=valuation.get('gztime'),
-        dwjz=valuation.get('dwjz'),
-        jzrq=valuation.get('jzrq'),
-        success=True,
-        display_date=valuation.get('display_date'),
-        confirmed_date=valuation.get('confirmed_date'),
-        base_date=valuation.get('base_date'),
-        quote_source=valuation.get('quote_source') or 'eastmoney_guzhi',
+    snapshot = get_pingzhongdata_snapshot(code)
+    if valuation:
+        direct_source_message = f'直接估值尚未更新至 {today}'
+        fallback_name = valuation.get('name') or fallback_name
+    else:
+        direct_source_message = '新浪和东方财富直接估值暂无数据'
+
+    holdings_estimate = _build_holdings_estimate(
+        code,
+        fallback_name,
+        snapshot,
+        direct_source_message,
     )
-    return _enrich_confirmed_nav(code, result)
+    if holdings_estimate:
+        return holdings_estimate
+    return _load_pingzhong_fallback(
+        code,
+        fallback_name,
+        direct_source_message,
+        snapshot=snapshot,
+    )
 
 
 def _fetch_and_cache_basic(code):

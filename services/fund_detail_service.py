@@ -208,6 +208,8 @@ def _get_holdings_via_akshare_once(fund_code):
             if q and quote_name_matches(item.get('name', ''), q.get('name', '')):
                 item['price'] = q.get('price', '-')
                 item['change_pct'] = q.get('change_pct', '-')
+                item['quote_date'] = q.get('quote_date', '')
+                item['quote_time'] = q.get('quote_time', '')
         return {'success': True, 'holdings': holdings, 'date': report_date}
     except Exception as e:
         return {'success': False, 'holdings': [], 'date': '', 'error': str(e)}
@@ -295,6 +297,8 @@ def get_fund_holdings(fund_code):
                 if q and quote_name_matches(item.get('name', ''), q.get('name', '')):
                     item['price'] = q.get('price', '-')
                     item['change_pct'] = q.get('change_pct', '-')
+                    item['quote_date'] = q.get('quote_date', '')
+                    item['quote_time'] = q.get('quote_time', '')
                 else:
                     hk_fallback_items.append({'code': item['code'], 'name': item.get('name', ''), 'market': 'hk'})
             if hk_fallback_items:
@@ -306,6 +310,8 @@ def get_fund_holdings(fund_code):
                     if hk_q and hk_q.get('price') not in (None, '', '-'):
                         item['price'] = hk_q.get('price', '-')
                         item['change_pct'] = hk_q.get('change_pct', '-')
+                        item['quote_date'] = hk_q.get('quote_date', '')
+                        item['quote_time'] = hk_q.get('quote_time', '')
             for item in holdings:
                 item.pop('market', None)
         code = str(fund_code).zfill(6)

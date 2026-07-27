@@ -10,6 +10,7 @@ from core.time_utils import china_now
 
 
 EASTMONEY_VALUATION_URL = 'https://api.fund.eastmoney.com/FundGuZhi/GetFundGZList'
+SINA_VALUATION_URL = 'https://hq.sinajs.cn/list=fu_{code}'
 VALUATION_CACHE_TTL_SECONDS = 45
 VALUATION_STALE_TTL_SECONDS = 5 * 60
 VALUATION_RETRY_SECONDS = 10
@@ -18,6 +19,11 @@ _VALUATION_CACHE = {}
 _VALUATION_CACHE_REFRESHED_AT = 0.0
 _VALUATION_LAST_ATTEMPT_AT = 0.0
 _VALUATION_CACHE_LOCK = threading.Lock()
+
+_SINA_VALUATION_CACHE = {}
+_SINA_VALUATION_REFRESHED_AT = {}
+_SINA_VALUATION_LAST_ATTEMPT_AT = {}
+_SINA_VALUATION_CACHE_LOCK = threading.Lock()
 
 
 def _clean_number_text(value, allow_percent=False):
@@ -37,6 +43,115 @@ def _clean_date(value):
     text = str(value or '').strip()
     match = re.search(r'\d{4}-\d{2}-\d{2}', text)
     return match.group(0) if match else ''
+
+
+def _response_text(response):
+    content = getattr(response, 'content', None)
+    if content:
+        try:
+            return content.decode('gb18030')
+        except (UnicodeDecodeError, AttributeError):
+            return content.decode('utf-8', errors='replace')
+    return str(getattr(response, 'text', '') or '')
+
+
+def _parse_sina_valuation(text, fund_code):
+    code = str(fund_code or '').strip().zfill(6)
+    match = re.search(
+        rf'var\s+hq_str_fu_{re.escape(code)}\s*=\s*"([^"]*)"\s*;?',
+        str(text or ''),
+    )
+    if not match:
+        return None
+
+    fields = [item.strip() for item in match.group(1).split(',')]
+    if len(fields) < 8:
+        return None
+
+    name = fields[0]
+    quote_time = fields[1]
+    estimate_nav = _clean_number_text(fields[2])
+    base_nav = _clean_number_text(fields[3])
+    estimate_change = _clean_number_text(fields[6], allow_percent=True)
+    estimate_date = _clean_date(fields[7])
+    if (
+        not name
+        or not re.fullmatch(r'\d{2}:\d{2}:\d{2}', quote_time)
+        or not estimate_nav
+        or not base_nav
+        or not estimate_change
+        or not estimate_date
+    ):
+        return None
+
+    try:
+        estimate_nav_number = float(estimate_nav)
+        base_nav_number = float(base_nav)
+        estimate_change_number = float(estimate_change)
+    except (TypeError, ValueError):
+        return None
+    if estimate_nav_number <= 0 or base_nav_number <= 0:
+        return None
+
+    calculated_change = (estimate_nav_number / base_nav_number - 1) * 100
+    if abs(calculated_change - estimate_change_number) > 0.05:
+        return None
+
+    return {
+        'code': code,
+        'name': name,
+        'gsz': estimate_nav,
+        'gszzl': estimate_change,
+        'gztime': f'{estimate_date} {quote_time}',
+        'dwjz': base_nav,
+        'jzrq': '-',
+        'display_date': estimate_date,
+        'confirmed_date': '-',
+        'base_date': '-',
+        'quote_source': 'sina_fund_valuation',
+    }
+
+
+def _fetch_sina_valuation(fund_code):
+    code = str(fund_code or '').strip().zfill(6)
+    response = http_get(
+        SINA_VALUATION_URL.format(code=code),
+        headers={
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://finance.sina.com.cn/fund/',
+        },
+        timeout=5,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f'sina valuation endpoint returned HTTP {response.status_code}')
+    return _parse_sina_valuation(_response_text(response), code)
+
+
+def _get_sina_valuation(fund_code, force_refresh=False):
+    code = str(fund_code or '').strip().zfill(6)
+    now = time.monotonic()
+    with _SINA_VALUATION_CACHE_LOCK:
+        cached = _SINA_VALUATION_CACHE.get(code)
+        refreshed_at = _SINA_VALUATION_REFRESHED_AT.get(code, 0.0)
+        last_attempt_at = _SINA_VALUATION_LAST_ATTEMPT_AT.get(code, 0.0)
+        age = now - refreshed_at if refreshed_at else None
+        if not force_refresh and cached and age is not None and age < VALUATION_CACHE_TTL_SECONDS:
+            return cached
+        if not force_refresh and last_attempt_at and now - last_attempt_at < VALUATION_RETRY_SECONDS:
+            return cached if cached and age is not None and age < VALUATION_STALE_TTL_SECONDS else None
+        _SINA_VALUATION_LAST_ATTEMPT_AT[code] = now
+
+    try:
+        refreshed = _fetch_sina_valuation(code)
+    except Exception:
+        return cached if cached and age is not None and age < VALUATION_STALE_TTL_SECONDS else None
+    if not refreshed:
+        return cached if cached and age is not None and age < VALUATION_STALE_TTL_SECONDS else None
+
+    with _SINA_VALUATION_CACHE_LOCK:
+        _SINA_VALUATION_CACHE[code] = refreshed
+        _SINA_VALUATION_REFRESHED_AT[code] = time.monotonic()
+    return refreshed
 
 
 def _parse_valuation_payload(payload, observed_at=None):
@@ -144,4 +259,12 @@ def get_fund_valuation(fund_code, force_refresh=False):
     code = str(fund_code or '').strip().zfill(6)
     if len(code) != 6 or not code.isdigit():
         return None
-    return _get_valuation_map(force_refresh=force_refresh).get(code)
+    today = china_now().strftime('%Y-%m-%d')
+    sina_valuation = _get_sina_valuation(code, force_refresh=force_refresh)
+    if sina_valuation and sina_valuation.get('display_date') == today:
+        return sina_valuation
+
+    eastmoney_valuation = _get_valuation_map(force_refresh=force_refresh).get(code)
+    if eastmoney_valuation and eastmoney_valuation.get('display_date') == today:
+        return eastmoney_valuation
+    return sina_valuation or eastmoney_valuation
